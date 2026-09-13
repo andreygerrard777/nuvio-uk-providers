@@ -29,6 +29,48 @@
       "formats": ["m3u8"],
       "logo": "https://www.google.com/s2/favicons?domain=uakino.best&sz=128",
       "contentLanguage": ["uk"]
+    },
+    {
+      "id": "klontv",
+      "name": "KlonTV",
+      "description": "KlonTV - фільми, серіали, мультфільми та аніме українською (порт з CloudStream)",
+      "version": "1.0.0",
+      "author": "ported from CakesTwix/cloudstream-extensions-uk",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/klontv.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": ["m3u8"],
+      "logo": "https://www.google.com/s2/favicons?domain=klonua.com&sz=128",
+      "contentLanguage": ["uk"]
+    },
+    {
+      "id": "kinotron",
+      "name": "KinoTron",
+      "description": "KinoTron - фільми, серіали, мультфільми та аніме українською (порт з CloudStream)",
+      "version": "1.0.0",
+      "author": "ported from CakesTwix/cloudstream-extensions-uk",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/kinotron.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": ["m3u8"],
+      "logo": "https://www.google.com/s2/favicons?domain=kinotron.tv&sz=128",
+      "contentLanguage": ["uk"]
+    },
+    {
+      "id": "uaserialspro",
+      "name": "UASerialsPro",
+      "description": "UASerialsPro - серіали, мультсеріали, аніме та фільми українською (порт з CloudStream, з власною AES-розшифровкою)",
+      "version": "1.0.0",
+      "author": "ported from CakesTwix/cloudstream-extensions-uk",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/uaserialspro.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": ["m3u8"],
+      "logo": "https://www.google.com/s2/favicons?domain=uaserials.com&sz=128",
+      "contentLanguage": ["uk"]
     }
   ]
 }
