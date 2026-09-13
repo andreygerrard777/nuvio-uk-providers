@@ -2,14 +2,15 @@
 // Hand-ported from the CloudStream Kotlin provider UakinoProvider.kt / UakinoParsing.kt
 // (https://github.com/CakesTwix/cloudstream-extensions-uk).
 //
-// !!! KNOWN RISK: as of the port date, uakino.best returns a Cloudflare "Managed Challenge"
-// ("Just a moment...") page to plain HTTP requests (verified from this environment, on both
-// the homepage and the search endpoint). A bare fetch() with no JS execution cannot solve
-// that challenge. Real end-user devices on residential/mobile IPs may or may not get
-// challenged (Cloudflare risk-scores by IP reputation, and datacenter IPs get hit hardest),
-// so this needs to be verified for real in the Nuvio Plugin Tester on an actual device before
-// relying on it. If it's consistently challenged there too, this provider cannot work without
-// a browser-based solver, which is outside what a Nuvio JS provider can do.
+// !!! KNOWN RISK: uakino.best sits behind Cloudflare. A plain HTTP request from a
+// datacenter/cloud IP gets served a "Just a moment..." managed-challenge page instead of
+// real content (confirmed from this environment). A real browser on a residential/mobile
+// connection was confirmed (via a captured HAR) to pass through with zero challenge, so the
+// site itself isn't universally gated - only traffic Cloudflare flags as suspicious is. If a
+// Nuvio provider's fetch() is still blocked on a real device, that points to Nuvio routing
+// plugin network calls through its own backend infrastructure (a datacenter IP) rather than
+// the device's own connection - something no amount of JS here can work around. Verify this
+// live before relying on the provider.
 //
 // Nuvio only gives us a TMDB id, not a title, so this provider resolves the TMDB id to a
 // title via the TMDB API, then runs it through Uakino's own site search and picks the best
@@ -203,14 +204,25 @@ function extractPlayerStream(playerUrl, sourceName) {
   });
 }
 
-// --- Movie flow: detail page -> iframe#pre --------------------------------
+// --- Movie flow ------------------------------------------------------------
+// Confirmed against a real captured page: a movie detail page normally has an
+// EMPTY <div id="pre" class="playlists-ajax" data-news_id="N"></div> that gets
+// filled client-side via playlists.php (same mechanism as TV episodes, just
+// with no episode filter - every <li> is a different dub/source for the movie).
+// Only if that ajax has no success does Kotlin fall back to scraping an
+// <iframe id="pre">. Confusingly, on at least one real page that literal
+// iframe#pre turned out to be the YouTube trailer, not the movie - a quirk of
+// the site's own markup (duplicate id="pre"), inherited as-is from the
+// original CloudStream provider's fallback behavior.
 
 function resolveMovie(detailUrl) {
   return fetchHtml(detailUrl, baseHeaders()).then(function (html) {
-    var m = /id=["']pre["'][\s\S]{0,200}?<iframe[^>]+src="([^"]+)"/.exec(html) ||
-      /<iframe[^>]+id=["']pre["'][^>]+src="([^"]+)"/.exec(html);
-    if (!m) return [];
-    return extractPlayerStream(normalizePlayerUrl(m[1]), 'Uakino').then(function (s) { return s ? [s] : []; });
+    return loadEpisodesFor(detailUrl, html, null).then(function (streams) {
+      if (streams.length) return streams;
+      var m = /<iframe[^>]+id=["']pre["'][^>]+src="([^"]+)"/.exec(html);
+      if (!m) return [];
+      return extractPlayerStream(normalizePlayerUrl(m[1]), 'Uakino').then(function (s) { return s ? [s] : []; });
+    });
   });
 }
 
@@ -243,17 +255,21 @@ function fetchEpisodeList(newsId) {
   return fetch(url, { headers: ajaxHeaders() }).then(function (r) { return r.json(); }).catch(function () { return null; });
 }
 
+// Confirmed against a real playlists.php response: attributes appear as
+// data-file, data-id, data-voice (in that order), and a trailing rating-button
+// <li> has no data-file at all. Extracting the tag's attribute text first and
+// then pulling data-file/data-voice out of it independently (rather than one
+// combined regex) avoids the whole match depending on attribute order.
 function parseEpisodeItems(html) {
   var items = [];
-  var re = /<li[^>]*data-file="([^"]*)"[^>]*(?:data-voice="([^"]*)")?[^>]*>([^<]*)<\/li>/g;
+  var re = /<li([^>]*)>([^<]*)<\/li>/g;
   var m;
   while ((m = re.exec(html))) {
-    items.push({ file: m[1], voice: m[2] || '', label: (m[3] || '').trim() });
-  }
-  // data-voice may appear before data-file depending on markup order; retry the other order too.
-  if (!items.length) {
-    re = /<li[^>]*data-voice="([^"]*)"[^>]*data-file="([^"]*)"[^>]*>([^<]*)<\/li>/g;
-    while ((m = re.exec(html))) items.push({ file: m[2], voice: m[1] || '', label: (m[3] || '').trim() });
+    var attrs = m[1];
+    var fileMatch = /data-file="([^"]*)"/.exec(attrs);
+    if (!fileMatch || !fileMatch[1]) continue;
+    var voiceMatch = /data-voice="([^"]*)"/.exec(attrs);
+    items.push({ file: fileMatch[1], voice: voiceMatch ? voiceMatch[1] : '', label: (m[2] || '').trim() });
   }
   return items;
 }
@@ -273,11 +289,12 @@ function resolveTv(detailUrl, season, episode) {
 
 function loadEpisodesFor(pageUrl, html, episode) {
   var newsId = findNewsId(html, pageUrl);
-  if (!newsId) return [];
+  if (!newsId) return Promise.resolve([]);
   return fetchEpisodeList(newsId).then(function (data) {
     if (!data || !data.success) return [];
     var items = parseEpisodeItems(String(data.response || ''));
-    var target = items.filter(function (it) {
+    // episode == null means "movie": every <li> is a different dub/source, take them all.
+    var target = episode == null ? items : items.filter(function (it) {
       var n = (/\d+/.exec(it.label) || [])[0];
       return n && parseInt(n, 10) === episode;
     });
