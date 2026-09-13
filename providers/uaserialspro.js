@@ -64,55 +64,122 @@ function guessQuality(url) {
 
 // =====================================================================
 // Pure-JS crypto: SHA-512, HMAC-SHA512, PBKDF2, AES-256-CBC (NoPadding).
-// Verified against CryptoJS output on real captured ciphertext and against
-// the official SHA-512("abc") test vector before shipping.
+// SHA-512 is implemented with 32-bit hi/lo word pairs rather than BigInt:
+// Hermes (the RN JS engine Nuvio runs on) has no JIT and its BigInt path is
+// considerably slower than plain number ops, and PBKDF2 here runs ~2000
+// SHA-512 compressions per key derivation - a BigInt version risked being
+// slow enough to hit Nuvio's provider timeout on-device even though it ran
+// fine in a desktop browser. Verified against CryptoJS output on real
+// captured ciphertext and against the official SHA-512("abc") test vector.
 // =====================================================================
 
-var MASK64 = (1n << 64n) - 1n;
-function rotr64(x, n) { return ((x >> n) | (x << (64n - n))) & MASK64; }
-function shr64(x, n) { return x >> n; }
+var SHA512_K_HI = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2, 0xca273ece, 0xd186b8c7, 0xeada7dd6, 0xf57d4f7f, 0x06f067aa, 0x0a637dc5, 0x113f9804, 0x1b710b35, 0x28db77f5, 0x32caab7b, 0x3c9ebe0a, 0x431d67c4, 0x4cc5d4be, 0x597f299c, 0x5fcb6fab, 0x6c44198c];
+var SHA512_K_LO = [0xd728ae22, 0x23ef65cd, 0xec4d3b2f, 0x8189dbbc, 0xf348b538, 0xb605d019, 0xaf194f9b, 0xda6d8118, 0xa3030242, 0x45706fbe, 0x4ee4b28c, 0xd5ffb4e2, 0xf27b896f, 0x3b1696b1, 0x25c71235, 0xcf692694, 0x9ef14ad2, 0x384f25e3, 0x8b8cd5b5, 0x77ac9c65, 0x592b0275, 0x6ea6e483, 0xbd41fbd4, 0x831153b5, 0xee66dfab, 0x2db43210, 0x98fb213f, 0xbeef0ee4, 0x3da88fc2, 0x930aa725, 0xe003826f, 0x0a0e6e70, 0x46d22ffc, 0x5c26c926, 0x5ac42aed, 0x9d95b3df, 0x8baf63de, 0x3c77b2a8, 0x47edaee6, 0x1482353b, 0x4cf10364, 0xbc423001, 0xd0f89791, 0x0654be30, 0xd6ef5218, 0x5565a910, 0x5771202a, 0x32bbd1b8, 0xb8d2d0c8, 0x5141ab53, 0xdf8eeb99, 0xe19b48a8, 0xc5c95a63, 0xe3418acb, 0x7763e373, 0xd6b2b8a3, 0x5defb2fc, 0x43172f60, 0xa1f0ab72, 0x1a6439ec, 0x23631e28, 0xde82bde9, 0xb2c67915, 0xe372532b, 0xea26619c, 0x21c0c207, 0xcde0eb1e, 0xee6ed178, 0x72176fba, 0xa2c898a6, 0xbef90dae, 0x131c471b, 0x23047d84, 0x40c72493, 0x15c9bebc, 0x9c100d4c, 0xcb3e42b6, 0xfc657e2a, 0x3ad6faec, 0x4a475817];
+var SHA512_H0_HI = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+var SHA512_H0_LO = [0xf3bcc908, 0x84caa73b, 0xfe94f82b, 0x5f1d36f1, 0xade682d1, 0x2b3e6c1f, 0xfb41bd6b, 0x137e2179];
 
-var SHA512_K = ['428a2f98d728ae22', '7137449123ef65cd', 'b5c0fbcfec4d3b2f', 'e9b5dba58189dbbc', '3956c25bf348b538', '59f111f1b605d019', '923f82a4af194f9b', 'ab1c5ed5da6d8118', 'd807aa98a3030242', '12835b0145706fbe', '243185be4ee4b28c', '550c7dc3d5ffb4e2', '72be5d74f27b896f', '80deb1fe3b1696b1', '9bdc06a725c71235', 'c19bf174cf692694', 'e49b69c19ef14ad2', 'efbe4786384f25e3', '0fc19dc68b8cd5b5', '240ca1cc77ac9c65', '2de92c6f592b0275', '4a7484aa6ea6e483', '5cb0a9dcbd41fbd4', '76f988da831153b5', '983e5152ee66dfab', 'a831c66d2db43210', 'b00327c898fb213f', 'bf597fc7beef0ee4', 'c6e00bf33da88fc2', 'd5a79147930aa725', '06ca6351e003826f', '142929670a0e6e70', '27b70a8546d22ffc', '2e1b21385c26c926', '4d2c6dfc5ac42aed', '53380d139d95b3df', '650a73548baf63de', '766a0abb3c77b2a8', '81c2c92e47edaee6', '92722c851482353b', 'a2bfe8a14cf10364', 'a81a664bbc423001', 'c24b8b70d0f89791', 'c76c51a30654be30', 'd192e819d6ef5218', 'd69906245565a910', 'f40e35855771202a', '106aa07032bbd1b8', '19a4c116b8d2d0c8', '1e376c085141ab53', '2748774cdf8eeb99', '34b0bcb5e19b48a8', '391c0cb3c5c95a63', '4ed8aa4ae3418acb', '5b9cca4f7763e373', '682e6ff3d6b2b8a3', '748f82ee5defb2fc', '78a5636f43172f60', '84c87814a1f0ab72', '8cc702081a6439ec', '90befffa23631e28', 'a4506cebde82bde9', 'bef9a3f7b2c67915', 'c67178f2e372532b', 'ca273eceea26619c', 'd186b8c721c0c207', 'eada7dd6cde0eb1e', 'f57d4f7fee6ed178', '06f067aa72176fba', '0a637dc5a2c898a6', '113f9804bef90dae', '1b710b35131c471b', '28db77f523047d84', '32caab7b40c72493', '3c9ebe0a15c9bebc', '431d67c49c100d4c', '4cc5d4becb3e42b6', '597f299cfc657e2a', '5fcb6fab3ad6faec', '6c44198c4a475817'].map(function (h) { return BigInt('0x' + h); });
-var SHA512_H0 = ['6a09e667f3bcc908', 'bb67ae8584caa73b', '3c6ef372fe94f82b', 'a54ff53a5f1d36f1', '510e527fade682d1', '9b05688c2b3e6c1f', '1f83d9abfb41bd6b', '5be0cd19137e2179'].map(function (h) { return BigInt('0x' + h); });
+function add64(ah, al, bh, bl) {
+  var lo = (al >>> 0) + (bl >>> 0);
+  var carry = lo > 0xffffffff ? 1 : 0;
+  lo = lo >>> 0;
+  var hi = ((ah >>> 0) + (bh >>> 0) + carry) >>> 0;
+  return [hi, lo];
+}
+function add64_4(ah, al, bh, bl, ch, cl, dh, dl) {
+  var r1 = add64(ah, al, bh, bl);
+  var r2 = add64(r1[0], r1[1], ch, cl);
+  return add64(r2[0], r2[1], dh, dl);
+}
+function add64_5(ah, al, bh, bl, ch, cl, dh, dl, eh, el) {
+  var r = add64_4(ah, al, bh, bl, ch, cl, dh, dl);
+  return add64(r[0], r[1], eh, el);
+}
+function rotr(hi, lo, n) {
+  if (n === 0) return [hi >>> 0, lo >>> 0];
+  if (n < 32) return [((hi >>> n) | (lo << (32 - n))) >>> 0, ((lo >>> n) | (hi << (32 - n))) >>> 0];
+  if (n === 32) return [lo >>> 0, hi >>> 0];
+  var m = n - 32;
+  return [((lo >>> m) | (hi << (32 - m))) >>> 0, ((hi >>> m) | (lo << (32 - m))) >>> 0];
+}
+function shr(hi, lo, n) {
+  if (n === 0) return [hi >>> 0, lo >>> 0];
+  if (n < 32) return [(hi >>> n) >>> 0, ((lo >>> n) | (hi << (32 - n))) >>> 0];
+  return [0, (hi >>> (n - 32)) >>> 0];
+}
+function xor64(ah, al, bh, bl) { return [(ah ^ bh) >>> 0, (al ^ bl) >>> 0]; }
+function and64(ah, al, bh, bl) { return [(ah & bh) >>> 0, (al & bl) >>> 0]; }
+function not64(ah, al) { return [(~ah) >>> 0, (~al) >>> 0]; }
 
 function sha512(bytes) {
-  var ml = BigInt(bytes.length) * 8n;
+  var ml = bytes.length * 8;
   var msg = Array.from(bytes);
   msg.push(0x80);
   while (msg.length % 128 !== 112) msg.push(0);
-  for (var i = 0; i < 8; i++) msg.push(0); // upper 64 bits of length: always 0 for our message sizes
-  for (var i = 7; i >= 0; i--) msg.push(Number((ml >> BigInt(i * 8)) & 0xffn));
+  for (var i = 0; i < 12; i++) msg.push(0); // upper 96 bits of length: always 0 for our message sizes
+  msg.push((ml >>> 24) & 0xff, (ml >>> 16) & 0xff, (ml >>> 8) & 0xff, ml & 0xff);
 
-  var H = SHA512_H0.slice();
+  var Hhi = SHA512_H0_HI.slice(), Hlo = SHA512_H0_LO.slice();
+  var whi = new Array(80), wlo = new Array(80);
+
   for (var b = 0; b < msg.length / 128; b++) {
-    var w = new Array(80);
     for (var t = 0; t < 16; t++) {
-      var word = 0n;
-      for (var i2 = 0; i2 < 8; i2++) word = (word << 8n) | BigInt(msg[b * 128 + t * 8 + i2]);
-      w[t] = word;
+      var off = b * 128 + t * 8;
+      whi[t] = ((msg[off] << 24) | (msg[off + 1] << 16) | (msg[off + 2] << 8) | msg[off + 3]) >>> 0;
+      wlo[t] = ((msg[off + 4] << 24) | (msg[off + 5] << 16) | (msg[off + 6] << 8) | msg[off + 7]) >>> 0;
     }
     for (var t2 = 16; t2 < 80; t2++) {
-      var s0 = rotr64(w[t2 - 15], 1n) ^ rotr64(w[t2 - 15], 8n) ^ shr64(w[t2 - 15], 7n);
-      var s1 = rotr64(w[t2 - 2], 19n) ^ rotr64(w[t2 - 2], 61n) ^ shr64(w[t2 - 2], 6n);
-      w[t2] = (w[t2 - 16] + s0 + w[t2 - 7] + s1) & MASK64;
+      var a15 = rotr(whi[t2 - 15], wlo[t2 - 15], 1);
+      var b15 = rotr(whi[t2 - 15], wlo[t2 - 15], 8);
+      var c15 = shr(whi[t2 - 15], wlo[t2 - 15], 7);
+      var xa = xor64(a15[0], a15[1], b15[0], b15[1]);
+      var s0 = xor64(xa[0], xa[1], c15[0], c15[1]);
+      var a2 = rotr(whi[t2 - 2], wlo[t2 - 2], 19);
+      var b2 = rotr(whi[t2 - 2], wlo[t2 - 2], 61);
+      var c2 = shr(whi[t2 - 2], wlo[t2 - 2], 6);
+      var xb = xor64(a2[0], a2[1], b2[0], b2[1]);
+      var s1 = xor64(xb[0], xb[1], c2[0], c2[1]);
+      var sum = add64_4(whi[t2 - 16], wlo[t2 - 16], s0[0], s0[1], whi[t2 - 7], wlo[t2 - 7], s1[0], s1[1]);
+      whi[t2] = sum[0]; wlo[t2] = sum[1];
     }
-    var a = H[0], bb = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    var ah = Hhi[0], al = Hlo[0], bh = Hhi[1], bl = Hlo[1], ch = Hhi[2], cl = Hlo[2], dh = Hhi[3], dl = Hlo[3];
+    var eh = Hhi[4], el = Hlo[4], fh = Hhi[5], fl = Hlo[5], gh = Hhi[6], gl = Hlo[6], hh = Hhi[7], hl = Hlo[7];
     for (var t3 = 0; t3 < 80; t3++) {
-      var S1 = rotr64(e, 14n) ^ rotr64(e, 18n) ^ rotr64(e, 41n);
-      var ch = (e & f) ^ ((~e) & g);
-      var temp1 = (h + S1 + (ch & MASK64) + SHA512_K[t3] + w[t3]) & MASK64;
-      var S0 = rotr64(a, 28n) ^ rotr64(a, 34n) ^ rotr64(a, 39n);
-      var maj = (a & bb) ^ (a & c) ^ (bb & c);
-      var temp2 = (S0 + (maj & MASK64)) & MASK64;
-      h = g; g = f; f = e; e = (d + temp1) & MASK64; d = c; c = bb; bb = a; a = (temp1 + temp2) & MASK64;
+      var e14 = rotr(eh, el, 14), e18 = rotr(eh, el, 18), e41 = rotr(eh, el, 41);
+      var S1a = xor64(e14[0], e14[1], e18[0], e18[1]);
+      var S1 = xor64(S1a[0], S1a[1], e41[0], e41[1]);
+      var notE = not64(eh, el);
+      var ch1 = and64(eh, el, fh, fl);
+      var ch2 = and64(notE[0], notE[1], gh, gl);
+      var Ch = xor64(ch1[0], ch1[1], ch2[0], ch2[1]);
+      var temp1 = add64_5(hh, hl, S1[0], S1[1], Ch[0], Ch[1], SHA512_K_HI[t3], SHA512_K_LO[t3], whi[t3], wlo[t3]);
+      var a28 = rotr(ah, al, 28), a34 = rotr(ah, al, 34), a39 = rotr(ah, al, 39);
+      var S0a = xor64(a28[0], a28[1], a34[0], a34[1]);
+      var S0 = xor64(S0a[0], S0a[1], a39[0], a39[1]);
+      var maj1 = and64(ah, al, bh, bl), maj2 = and64(ah, al, ch, cl), maj3 = and64(bh, bl, ch, cl);
+      var majx = xor64(maj1[0], maj1[1], maj2[0], maj2[1]);
+      var Maj = xor64(majx[0], majx[1], maj3[0], maj3[1]);
+      var temp2 = add64(S0[0], S0[1], Maj[0], Maj[1]);
+
+      hh = gh; hl = gl; gh = fh; gl = fl; fh = eh; fl = el;
+      var de = add64(dh, dl, temp1[0], temp1[1]); eh = de[0]; el = de[1];
+      dh = ch; dl = cl; ch = bh; cl = bl; bh = ah; bl = al;
+      var aa = add64(temp1[0], temp1[1], temp2[0], temp2[1]); ah = aa[0]; al = aa[1];
     }
-    H[0] = (H[0] + a) & MASK64; H[1] = (H[1] + bb) & MASK64; H[2] = (H[2] + c) & MASK64; H[3] = (H[3] + d) & MASK64;
-    H[4] = (H[4] + e) & MASK64; H[5] = (H[5] + f) & MASK64; H[6] = (H[6] + g) & MASK64; H[7] = (H[7] + h) & MASK64;
+    var r0 = add64(Hhi[0], Hlo[0], ah, al); Hhi[0] = r0[0]; Hlo[0] = r0[1];
+    var r1 = add64(Hhi[1], Hlo[1], bh, bl); Hhi[1] = r1[0]; Hlo[1] = r1[1];
+    var r2 = add64(Hhi[2], Hlo[2], ch, cl); Hhi[2] = r2[0]; Hlo[2] = r2[1];
+    var r3 = add64(Hhi[3], Hlo[3], dh, dl); Hhi[3] = r3[0]; Hlo[3] = r3[1];
+    var r4 = add64(Hhi[4], Hlo[4], eh, el); Hhi[4] = r4[0]; Hlo[4] = r4[1];
+    var r5 = add64(Hhi[5], Hlo[5], fh, fl); Hhi[5] = r5[0]; Hlo[5] = r5[1];
+    var r6 = add64(Hhi[6], Hlo[6], gh, gl); Hhi[6] = r6[0]; Hlo[6] = r6[1];
+    var r7 = add64(Hhi[7], Hlo[7], hh, hl); Hhi[7] = r7[0]; Hlo[7] = r7[1];
   }
   var out = new Uint8Array(64);
-  for (var i3 = 0; i3 < 8; i3++) {
-    var v = H[i3];
-    for (var j = 7; j >= 0; j--) { out[i3 * 8 + j] = Number(v & 0xffn); v >>= 8n; }
+  for (var i2 = 0; i2 < 8; i2++) {
+    out[i2 * 8] = (Hhi[i2] >>> 24) & 0xff; out[i2 * 8 + 1] = (Hhi[i2] >>> 16) & 0xff;
+    out[i2 * 8 + 2] = (Hhi[i2] >>> 8) & 0xff; out[i2 * 8 + 3] = Hhi[i2] & 0xff;
+    out[i2 * 8 + 4] = (Hlo[i2] >>> 24) & 0xff; out[i2 * 8 + 5] = (Hlo[i2] >>> 16) & 0xff;
+    out[i2 * 8 + 6] = (Hlo[i2] >>> 8) & 0xff; out[i2 * 8 + 7] = Hlo[i2] & 0xff;
   }
   return out;
 }
