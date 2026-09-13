@@ -1,0 +1,34 @@
+{
+  "name": "UK-Providers-Nuvio",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "uaflix",
+      "name": "UAFlix",
+      "description": "UAFLIX - фільми і серіали українською (порт з CloudStream)",
+      "version": "1.0.0",
+      "author": "ported from CakesTwix/cloudstream-extensions-uk",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/uaflix.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": ["m3u8"],
+      "logo": "https://www.google.com/s2/favicons?domain=uafix.net&sz=128",
+      "contentLanguage": ["uk"]
+    },
+    {
+      "id": "uakino",
+      "name": "Uakino",
+      "description": "Uakino - фільми та серіали українською (порт з CloudStream, потребує перевірки через Cloudflare)",
+      "version": "1.0.0",
+      "author": "ported from CakesTwix/cloudstream-extensions-uk",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/uakino.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": ["m3u8"],
+      "logo": "https://www.google.com/s2/favicons?domain=uakino.best&sz=128",
+      "contentLanguage": ["uk"]
+    }
+  ]
+}
