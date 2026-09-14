@@ -329,11 +329,57 @@ function b64ToBytes(b64) {
   return new Uint8Array(bytes);
 }
 
+// Hand-rolled UTF-8 codec: TextEncoder/TextDecoder are Web APIs, not core JS - they are
+// not guaranteed to exist in Hermes/React Native without an explicit polyfill. A missing
+// TextEncoder would throw immediately on every call, which looks identical to a provider
+// that silently returns nothing (both get swallowed by the outer catch in getStreams).
+function utf8Encode(str) {
+  var bytes = [];
+  for (var i = 0; i < str.length; i++) {
+    var code = str.charCodeAt(i);
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < str.length) {
+      var next = str.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        var cp = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+        bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+        i++;
+      } else {
+        bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+      }
+    } else {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+  }
+  return new Uint8Array(bytes);
+}
+function utf8Decode(bytes) {
+  var out = '';
+  var i = 0;
+  while (i < bytes.length) {
+    var b0 = bytes[i];
+    if (b0 < 0x80) { out += String.fromCharCode(b0); i++; }
+    else if ((b0 & 0xe0) === 0xc0 && i + 1 < bytes.length) {
+      out += String.fromCharCode(((b0 & 0x1f) << 6) | (bytes[i + 1] & 0x3f)); i += 2;
+    } else if ((b0 & 0xf0) === 0xe0 && i + 2 < bytes.length) {
+      out += String.fromCharCode(((b0 & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f)); i += 3;
+    } else if ((b0 & 0xf8) === 0xf0 && i + 3 < bytes.length) {
+      var cp = ((b0 & 0x07) << 18) | ((bytes[i + 1] & 0x3f) << 12) | ((bytes[i + 2] & 0x3f) << 6) | (bytes[i + 3] & 0x3f);
+      cp -= 0x10000;
+      out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff)); i += 4;
+    } else { i++; } // invalid byte, skip (mirrors {fatal:false} lenient behavior)
+  }
+  return out;
+}
+
 // Site's own AES payload: {ciphertext (base64), iv (hex), salt (hex)} -> decrypted plaintext.
 function decryptAesTag(aesData) {
-  var key32 = pbkdf2HmacSha512(new TextEncoder().encode(AES_PASSPHRASE), hexToBytes(aesData.salt), 999, 32);
+  var key32 = pbkdf2HmacSha512(utf8Encode(AES_PASSPHRASE), hexToBytes(aesData.salt), 999, 32);
   var plainBytes = aes256CbcDecryptNoPadding(b64ToBytes(aesData.ciphertext), key32, hexToBytes(aesData.iv));
-  var text = new TextDecoder('utf-8', { fatal: false }).decode(plainBytes);
+  var text = utf8Decode(plainBytes);
   // AES/CBC/NoPadding leaves trailing raw padding bytes after the real JSON; trim to the last ']'.
   var lastBracket = text.lastIndexOf(']');
   return lastBracket !== -1 ? text.slice(0, lastBracket + 1) : text;
