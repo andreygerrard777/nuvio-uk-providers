@@ -403,8 +403,9 @@ function getTmdbInfo(tmdbId, mediaType) {
 }
 
 // --- Site search -------------------------------------------------------
-// Confirmed live: <a class="uas-card" href="..."><span class="uas-card__title">Title</span>
-// <span class="uas-card__orig"><mark>...</mark>Orig Title</span>...</a>
+// Confirmed live: <a class="uas-card" href="..."><span class="uas-card__poster">...
+// <span class="uas-card__year">2024</span></span><span class="uas-card__body">
+// <span class="uas-card__title">Title</span><span class="uas-card__orig"><mark>...</mark>Orig Title</span>...</a>
 
 function parseSearchResults(html) {
   var results = [];
@@ -417,9 +418,11 @@ function parseSearchResults(html) {
     if (!hrefMatch) continue;
     var titleMatch = /class="uas-card__title"[^>]*>([\s\S]*?)<\/span>/.exec(m[2]);
     var origMatch = /class="uas-card__orig"[^>]*>([\s\S]*?)<\/span>/.exec(m[2]);
+    var yearMatch = /class="uas-card__year"[^>]*>([\s\S]*?)<\/span>/.exec(m[2]);
     var title = stripTags(titleMatch ? titleMatch[1] : '');
     var origTitle = stripTags(origMatch ? origMatch[1] : '');
-    if (title) results.push({ href: hrefMatch[1], title: title, origTitle: origTitle });
+    var year = yearMatch ? parseInt(stripTags(yearMatch[1]), 10) : null;
+    if (title) results.push({ href: hrefMatch[1], title: title, origTitle: origTitle, year: year || null });
   }
   return results;
 }
@@ -429,20 +432,38 @@ function searchUASerials(query) {
   return fetchHtml(url).then(parseSearchResults);
 }
 
+// Two failure modes this guards against, both confirmed against real search results:
+// 1. A title with no Ukrainian TMDB translation (title===originalTitle, e.g. "War") searches in
+//    English against a Ukrainian-titled catalog, so token overlap is ~0 for the correct result
+//    too - an exact year match is accepted as a substitute signal.
+// 2. A short/generic title (e.g. "Senna") can match a completely different production that
+//    happens to share the exact title - a confirmed year *mismatch* hard-rejects the candidate
+//    even when the title itself scores perfectly.
 function pickBestMatch(results, tmdbInfo) {
+  var candidates = results.filter(function (r) {
+    return !(tmdbInfo.year && r.year && r.year !== tmdbInfo.year);
+  });
   var best = null;
-  var bestScore = 0;
-  results.forEach(function (r) {
+  var bestScore = -1;
+  candidates.forEach(function (r) {
     var score = Math.max(
       tokenScore(r.title, tmdbInfo.title), tokenScore(r.title, tmdbInfo.originalTitle),
       tokenScore(r.origTitle, tmdbInfo.title), tokenScore(r.origTitle, tmdbInfo.originalTitle)
     );
-    if (score > bestScore) {
-      bestScore = score;
+    var yearBonus = (tmdbInfo.year && r.year && r.year === tmdbInfo.year) ? 0.3 : 0;
+    var combined = score + yearBonus;
+    if (combined > bestScore) {
+      bestScore = combined;
       best = r;
     }
   });
-  return bestScore >= 0.4 ? best : null;
+  if (!best) return null;
+  var titleScore = Math.max(
+    tokenScore(best.title, tmdbInfo.title), tokenScore(best.title, tmdbInfo.originalTitle),
+    tokenScore(best.origTitle, tmdbInfo.title), tokenScore(best.origTitle, tmdbInfo.originalTitle)
+  );
+  var yearMatch = tmdbInfo.year && best.year && best.year === tmdbInfo.year;
+  return (titleScore >= 0.4 || yearMatch) ? best : null;
 }
 
 // --- Player resolution -------------------------------------------------
@@ -481,18 +502,24 @@ function base64ToBytesXor(b64) {
 }
 
 // Tortuga XOR obfuscation: first byte is a salt, remaining bytes XOR-ed with (salt + 7*i + 13) % 256.
+// The recovered bytes are UTF-8 text (dub names embedded in TV episode data can be Cyrillic), so
+// they must go through utf8Decode - String.fromCharCode(byte) per raw byte produces a "binary"
+// string where multi-byte UTF-8 sequences never get recombined, which JSON.parse still accepts
+// (structurally valid JSON) but leaves non-ASCII string *values* mangled. Confirmed against a
+// real captured dub name ("ТакТребаПродакшн"): the old per-byte version reproduced the exact
+// mojibake seen in the app; decoding through utf8Decode fixes it.
 function tortugaDecode(encoded) {
   var clean = (encoded || '').trim().replace(/=+$/, '');
   if (!clean) return null;
   var bytes = base64ToBytesXor(clean);
   if (bytes.length < 2) return null;
   var salt = bytes[0];
-  var chars = [];
+  var out = new Uint8Array(bytes.length - 1);
   for (var i = 1; i < bytes.length; i++) {
     var key = (salt + 7 * (i - 1) + 13) % 256;
-    chars.push(String.fromCharCode(bytes[i] ^ key));
+    out[i - 1] = bytes[i] ^ key;
   }
-  return chars.join('');
+  return utf8Decode(out);
 }
 
 function extractFileField(html) {

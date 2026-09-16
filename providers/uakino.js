@@ -135,16 +135,26 @@ function getTmdbInfo(tmdbId, mediaType) {
 
 // --- Site search ---------------------------------------------------------
 // Mirrors `div.movie-item.short-item` -> `a.movie-title, a.full-movie` from the Kotlin selectors.
+// Each result also carries a "Рік випуску:" link (<a href=".../find/year/2007/">2007</a>) a
+// few hundred chars after the title anchor, inside the same movie-desc block - captured here by
+// windowing up to the next title match, since nested divs make this un-boundable with a single
+// regex.
 
 function parseSearchResults(html) {
-  var results = [];
-  var re = /<a[^>]*class="[^"]*(?:movie-title|full-movie)[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/g;
+  var titleRe = /<a[^>]*class="[^"]*(?:movie-title|full-movie)[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/g;
+  var matches = [];
   var m;
-  while ((m = re.exec(html))) {
-    if (BLACKLIST_RE.test(m[1])) continue;
-    var title = m[2].trim();
-    if (title) results.push({ href: m[1], title: title });
+  while ((m = titleRe.exec(html))) {
+    matches.push({ href: m[1], title: m[2].trim(), start: m.index, end: titleRe.lastIndex });
   }
+  var results = [];
+  matches.forEach(function (item, idx) {
+    if (BLACKLIST_RE.test(item.href) || !item.title) return;
+    var windowEnd = idx + 1 < matches.length ? matches[idx + 1].start : Math.min(html.length, item.end + 2000);
+    var win = html.slice(item.end, windowEnd);
+    var yearMatch = /\/find\/year\/(\d+)\//.exec(win);
+    results.push({ href: item.href, title: item.title, year: yearMatch ? parseInt(yearMatch[1], 10) : null });
+  });
   return results;
 }
 
@@ -157,17 +167,29 @@ function searchUakino(query) {
   }).then(function (r) { return r.text(); }).then(parseSearchResults);
 }
 
+// Year is used as a secondary signal alongside (not instead of) the title score: a query in
+// English against this Ukrainian-titled catalog (e.g. TMDB has no uk-UA translation for an older
+// film, so title===originalTitle) scores ~0 on tokens for the correct result too, since there's
+// no script overlap - an exact year match substitutes for that. A confirmed year *mismatch*
+// still isn't a hard veto here (unlike UASerialsPro's single-candidate case): Uakino searches
+// routinely return several genuinely different candidates, so year only breaks ties/rescues
+// otherwise-unscorable matches rather than filtering the candidate pool up front.
 function pickBestMatch(results, tmdbInfo) {
   var best = null;
-  var bestScore = 0;
+  var bestScore = -1;
   results.forEach(function (r) {
     var score = Math.max(tokenScore(r.title, tmdbInfo.title), tokenScore(r.title, tmdbInfo.originalTitle));
-    if (score > bestScore) {
-      bestScore = score;
+    var yearBonus = (tmdbInfo.year && r.year && r.year === tmdbInfo.year) ? 0.3 : 0;
+    var combined = score + yearBonus;
+    if (combined > bestScore) {
+      bestScore = combined;
       best = r;
     }
   });
-  return bestScore >= 0.4 ? best : null;
+  if (!best) return null;
+  var titleScore = Math.max(tokenScore(best.title, tmdbInfo.title), tokenScore(best.title, tmdbInfo.originalTitle));
+  var yearMatch = tmdbInfo.year && best.year && best.year === tmdbInfo.year;
+  return (titleScore >= 0.4 || yearMatch) ? best : null;
 }
 
 // --- Player extraction -----------------------------------------------------
