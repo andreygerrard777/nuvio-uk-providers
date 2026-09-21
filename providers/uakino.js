@@ -257,18 +257,25 @@ function findNewsId(html, url) {
   return slug.split('-')[0];
 }
 
+// Confirmed against a real multi-season page: <ul class="seasons clearfix"><li
+// class="season-active">1 сезон</li><li><a href="...-2-sezon.html">2 сезон</a></li></ul>.
+// The current season has no <a> at all (just plain text), only *other* seasons link out.
 function pickSeasonPage(html, season) {
+  var blockMatch = /<ul[^>]+class="[^"]*\bseasons\b[^"]*"[^>]*>[\s\S]*?<\/ul>/.exec(html);
+  // No seasons list found at all: treat as a single-season show rather than falling back to
+  // scanning the whole page for a stray numbered link, which can land on an unrelated show
+  // (confirmed: that fallback once matched something pointing at a totally different series).
+  if (!blockMatch) return season === 1 ? null : undefined;
   var results = [];
-  var re2 = /class="seasons"[\s\S]*?<\/ul>/;
-  var block = (re2.exec(html) || [html])[0];
   var anchorRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/g;
   var m;
-  while ((m = anchorRe.exec(block))) results.push({ href: m[1], label: m[2] });
-  if (!results.length) return null;
+  while ((m = anchorRe.exec(blockMatch[0]))) results.push({ href: m[1], label: m[2] });
   var match = results.filter(function (r) {
     var n = (/\d+/.exec(r.label) || [])[0];
     return n && parseInt(n, 10) === season;
   })[0];
+  // The requested season being absent as a link (it's the current page's own season, or it
+  // genuinely doesn't exist) is only "not found" for a season other than the current one.
   return match ? match.href : (season === 1 ? null : undefined);
 }
 
