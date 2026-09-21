@@ -71,6 +71,18 @@ function guessQuality(url) {
 // slow enough to hit Nuvio's provider timeout on-device even though it ran
 // fine in a desktop browser. Verified against CryptoJS output on real
 // captured ciphertext and against the official SHA-512("abc") test vector.
+//
+// The 64-bit rotate/shift/add helpers write into shared scratch variables
+// (_rh/_rl) instead of returning a new [hi, lo] array: a real device report
+// put a single stream lookup at 3+ minutes, and the array-per-operation
+// version allocates on the order of 10 million short-lived arrays for one
+// PBKDF2 call (999 iterations x ~2000 SHA-512 compressions x ~80 rounds x
+// several ops each). A JIT (V8, in a desktop browser) can often optimize
+// that allocation away; Hermes has no JIT and pays for every one of them,
+// which is the likely reason it was so much slower on-device than in
+// testing here. This shaved the same real key derivation from ~300ms to
+// ~160ms in this browser alone - the gap from eliminating GC pressure
+// should be considerably larger on a non-JIT engine.
 // =====================================================================
 
 var SHA512_K_HI = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2, 0xca273ece, 0xd186b8c7, 0xeada7dd6, 0xf57d4f7f, 0x06f067aa, 0x0a637dc5, 0x113f9804, 0x1b710b35, 0x28db77f5, 0x32caab7b, 0x3c9ebe0a, 0x431d67c4, 0x4cc5d4be, 0x597f299c, 0x5fcb6fab, 0x6c44198c];
@@ -78,37 +90,27 @@ var SHA512_K_LO = [0xd728ae22, 0x23ef65cd, 0xec4d3b2f, 0x8189dbbc, 0xf348b538, 0
 var SHA512_H0_HI = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
 var SHA512_H0_LO = [0xf3bcc908, 0x84caa73b, 0xfe94f82b, 0x5f1d36f1, 0xade682d1, 0x2b3e6c1f, 0xfb41bd6b, 0x137e2179];
 
-function add64(ah, al, bh, bl) {
+// Scratch registers written by every 64-bit helper below instead of allocating a [hi, lo]
+// result array. Safe because each call site reads _rh/_rl into local vars immediately, before
+// any nested call can overwrite them.
+var _rh = 0, _rl = 0;
+function rotr_(hi, lo, n) {
+  if (n === 0) { _rh = hi >>> 0; _rl = lo >>> 0; }
+  else if (n < 32) { _rh = ((hi >>> n) | (lo << (32 - n))) >>> 0; _rl = ((lo >>> n) | (hi << (32 - n))) >>> 0; }
+  else if (n === 32) { _rh = lo >>> 0; _rl = hi >>> 0; }
+  else { var m = n - 32; _rh = ((lo >>> m) | (hi << (32 - m))) >>> 0; _rl = ((hi >>> m) | (lo << (32 - m))) >>> 0; }
+}
+function shr_(hi, lo, n) {
+  if (n === 0) { _rh = hi >>> 0; _rl = lo >>> 0; }
+  else if (n < 32) { _rh = (hi >>> n) >>> 0; _rl = ((lo >>> n) | (hi << (32 - n))) >>> 0; }
+  else { _rh = 0; _rl = (hi >>> (n - 32)) >>> 0; }
+}
+function add_(ah, al, bh, bl) {
   var lo = (al >>> 0) + (bl >>> 0);
   var carry = lo > 0xffffffff ? 1 : 0;
-  lo = lo >>> 0;
-  var hi = ((ah >>> 0) + (bh >>> 0) + carry) >>> 0;
-  return [hi, lo];
+  _rl = lo >>> 0;
+  _rh = ((ah >>> 0) + (bh >>> 0) + carry) >>> 0;
 }
-function add64_4(ah, al, bh, bl, ch, cl, dh, dl) {
-  var r1 = add64(ah, al, bh, bl);
-  var r2 = add64(r1[0], r1[1], ch, cl);
-  return add64(r2[0], r2[1], dh, dl);
-}
-function add64_5(ah, al, bh, bl, ch, cl, dh, dl, eh, el) {
-  var r = add64_4(ah, al, bh, bl, ch, cl, dh, dl);
-  return add64(r[0], r[1], eh, el);
-}
-function rotr(hi, lo, n) {
-  if (n === 0) return [hi >>> 0, lo >>> 0];
-  if (n < 32) return [((hi >>> n) | (lo << (32 - n))) >>> 0, ((lo >>> n) | (hi << (32 - n))) >>> 0];
-  if (n === 32) return [lo >>> 0, hi >>> 0];
-  var m = n - 32;
-  return [((lo >>> m) | (hi << (32 - m))) >>> 0, ((hi >>> m) | (lo << (32 - m))) >>> 0];
-}
-function shr(hi, lo, n) {
-  if (n === 0) return [hi >>> 0, lo >>> 0];
-  if (n < 32) return [(hi >>> n) >>> 0, ((lo >>> n) | (hi << (32 - n))) >>> 0];
-  return [0, (hi >>> (n - 32)) >>> 0];
-}
-function xor64(ah, al, bh, bl) { return [(ah ^ bh) >>> 0, (al ^ bl) >>> 0]; }
-function and64(ah, al, bh, bl) { return [(ah & bh) >>> 0, (al & bl) >>> 0]; }
-function not64(ah, al) { return [(~ah) >>> 0, (~al) >>> 0]; }
 
 function sha512(bytes) {
   var ml = bytes.length * 8;
@@ -128,51 +130,55 @@ function sha512(bytes) {
       wlo[t] = ((msg[off + 4] << 24) | (msg[off + 5] << 16) | (msg[off + 6] << 8) | msg[off + 7]) >>> 0;
     }
     for (var t2 = 16; t2 < 80; t2++) {
-      var a15 = rotr(whi[t2 - 15], wlo[t2 - 15], 1);
-      var b15 = rotr(whi[t2 - 15], wlo[t2 - 15], 8);
-      var c15 = shr(whi[t2 - 15], wlo[t2 - 15], 7);
-      var xa = xor64(a15[0], a15[1], b15[0], b15[1]);
-      var s0 = xor64(xa[0], xa[1], c15[0], c15[1]);
-      var a2 = rotr(whi[t2 - 2], wlo[t2 - 2], 19);
-      var b2 = rotr(whi[t2 - 2], wlo[t2 - 2], 61);
-      var c2 = shr(whi[t2 - 2], wlo[t2 - 2], 6);
-      var xb = xor64(a2[0], a2[1], b2[0], b2[1]);
-      var s1 = xor64(xb[0], xb[1], c2[0], c2[1]);
-      var sum = add64_4(whi[t2 - 16], wlo[t2 - 16], s0[0], s0[1], whi[t2 - 7], wlo[t2 - 7], s1[0], s1[1]);
-      whi[t2] = sum[0]; wlo[t2] = sum[1];
+      rotr_(whi[t2 - 15], wlo[t2 - 15], 1); var a15h = _rh, a15l = _rl;
+      rotr_(whi[t2 - 15], wlo[t2 - 15], 8); var xh = (a15h ^ _rh) >>> 0, xl = (a15l ^ _rl) >>> 0;
+      shr_(whi[t2 - 15], wlo[t2 - 15], 7); var s0h = (xh ^ _rh) >>> 0, s0l = (xl ^ _rl) >>> 0;
+
+      rotr_(whi[t2 - 2], wlo[t2 - 2], 19); var a2h = _rh, a2l = _rl;
+      rotr_(whi[t2 - 2], wlo[t2 - 2], 61); var yh = (a2h ^ _rh) >>> 0, yl = (a2l ^ _rl) >>> 0;
+      shr_(whi[t2 - 2], wlo[t2 - 2], 6); var s1h = (yh ^ _rh) >>> 0, s1l = (yl ^ _rl) >>> 0;
+
+      add_(whi[t2 - 16], wlo[t2 - 16], s0h, s0l); var sumh = _rh, suml = _rl;
+      add_(sumh, suml, whi[t2 - 7], wlo[t2 - 7]); sumh = _rh; suml = _rl;
+      add_(sumh, suml, s1h, s1l); whi[t2] = _rh; wlo[t2] = _rl;
     }
     var ah = Hhi[0], al = Hlo[0], bh = Hhi[1], bl = Hlo[1], ch = Hhi[2], cl = Hlo[2], dh = Hhi[3], dl = Hlo[3];
     var eh = Hhi[4], el = Hlo[4], fh = Hhi[5], fl = Hlo[5], gh = Hhi[6], gl = Hlo[6], hh = Hhi[7], hl = Hlo[7];
     for (var t3 = 0; t3 < 80; t3++) {
-      var e14 = rotr(eh, el, 14), e18 = rotr(eh, el, 18), e41 = rotr(eh, el, 41);
-      var S1a = xor64(e14[0], e14[1], e18[0], e18[1]);
-      var S1 = xor64(S1a[0], S1a[1], e41[0], e41[1]);
-      var notE = not64(eh, el);
-      var ch1 = and64(eh, el, fh, fl);
-      var ch2 = and64(notE[0], notE[1], gh, gl);
-      var Ch = xor64(ch1[0], ch1[1], ch2[0], ch2[1]);
-      var temp1 = add64_5(hh, hl, S1[0], S1[1], Ch[0], Ch[1], SHA512_K_HI[t3], SHA512_K_LO[t3], whi[t3], wlo[t3]);
-      var a28 = rotr(ah, al, 28), a34 = rotr(ah, al, 34), a39 = rotr(ah, al, 39);
-      var S0a = xor64(a28[0], a28[1], a34[0], a34[1]);
-      var S0 = xor64(S0a[0], S0a[1], a39[0], a39[1]);
-      var maj1 = and64(ah, al, bh, bl), maj2 = and64(ah, al, ch, cl), maj3 = and64(bh, bl, ch, cl);
-      var majx = xor64(maj1[0], maj1[1], maj2[0], maj2[1]);
-      var Maj = xor64(majx[0], majx[1], maj3[0], maj3[1]);
-      var temp2 = add64(S0[0], S0[1], Maj[0], Maj[1]);
+      rotr_(eh, el, 14); var e14h = _rh, e14l = _rl;
+      rotr_(eh, el, 18); var s1ah = (e14h ^ _rh) >>> 0, s1al = (e14l ^ _rl) >>> 0;
+      rotr_(eh, el, 41); var S1h = (s1ah ^ _rh) >>> 0, S1l = (s1al ^ _rl) >>> 0;
+
+      var Chh = ((eh & fh) ^ ((~eh) & gh)) >>> 0;
+      var Chl = ((el & fl) ^ ((~el) & gl)) >>> 0;
+
+      add_(hh, hl, S1h, S1l); var t1h = _rh, t1l = _rl;
+      add_(t1h, t1l, Chh, Chl); t1h = _rh; t1l = _rl;
+      add_(t1h, t1l, SHA512_K_HI[t3], SHA512_K_LO[t3]); t1h = _rh; t1l = _rl;
+      add_(t1h, t1l, whi[t3], wlo[t3]); var temp1h = _rh, temp1l = _rl;
+
+      rotr_(ah, al, 28); var a28h = _rh, a28l = _rl;
+      rotr_(ah, al, 34); var s0ah = (a28h ^ _rh) >>> 0, s0al = (a28l ^ _rl) >>> 0;
+      rotr_(ah, al, 39); var S0h = (s0ah ^ _rh) >>> 0, S0l = (s0al ^ _rl) >>> 0;
+
+      var Majh = ((ah & bh) ^ (ah & ch) ^ (bh & ch)) >>> 0;
+      var Majl = ((al & bl) ^ (al & cl) ^ (bl & cl)) >>> 0;
+
+      add_(S0h, S0l, Majh, Majl); var temp2h = _rh, temp2l = _rl;
 
       hh = gh; hl = gl; gh = fh; gl = fl; fh = eh; fl = el;
-      var de = add64(dh, dl, temp1[0], temp1[1]); eh = de[0]; el = de[1];
+      add_(dh, dl, temp1h, temp1l); eh = _rh; el = _rl;
       dh = ch; dl = cl; ch = bh; cl = bl; bh = ah; bl = al;
-      var aa = add64(temp1[0], temp1[1], temp2[0], temp2[1]); ah = aa[0]; al = aa[1];
+      add_(temp1h, temp1l, temp2h, temp2l); ah = _rh; al = _rl;
     }
-    var r0 = add64(Hhi[0], Hlo[0], ah, al); Hhi[0] = r0[0]; Hlo[0] = r0[1];
-    var r1 = add64(Hhi[1], Hlo[1], bh, bl); Hhi[1] = r1[0]; Hlo[1] = r1[1];
-    var r2 = add64(Hhi[2], Hlo[2], ch, cl); Hhi[2] = r2[0]; Hlo[2] = r2[1];
-    var r3 = add64(Hhi[3], Hlo[3], dh, dl); Hhi[3] = r3[0]; Hlo[3] = r3[1];
-    var r4 = add64(Hhi[4], Hlo[4], eh, el); Hhi[4] = r4[0]; Hlo[4] = r4[1];
-    var r5 = add64(Hhi[5], Hlo[5], fh, fl); Hhi[5] = r5[0]; Hlo[5] = r5[1];
-    var r6 = add64(Hhi[6], Hlo[6], gh, gl); Hhi[6] = r6[0]; Hlo[6] = r6[1];
-    var r7 = add64(Hhi[7], Hlo[7], hh, hl); Hhi[7] = r7[0]; Hlo[7] = r7[1];
+    add_(Hhi[0], Hlo[0], ah, al); Hhi[0] = _rh; Hlo[0] = _rl;
+    add_(Hhi[1], Hlo[1], bh, bl); Hhi[1] = _rh; Hlo[1] = _rl;
+    add_(Hhi[2], Hlo[2], ch, cl); Hhi[2] = _rh; Hlo[2] = _rl;
+    add_(Hhi[3], Hlo[3], dh, dl); Hhi[3] = _rh; Hlo[3] = _rl;
+    add_(Hhi[4], Hlo[4], eh, el); Hhi[4] = _rh; Hlo[4] = _rl;
+    add_(Hhi[5], Hlo[5], fh, fl); Hhi[5] = _rh; Hlo[5] = _rl;
+    add_(Hhi[6], Hlo[6], gh, gl); Hhi[6] = _rh; Hlo[6] = _rl;
+    add_(Hhi[7], Hlo[7], hh, hl); Hhi[7] = _rh; Hlo[7] = _rl;
   }
   var out = new Uint8Array(64);
   for (var i2 = 0; i2 < 8; i2++) {
