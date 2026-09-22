@@ -75,8 +75,8 @@
     {
       "id": "rezka",
       "name": "HDRezka",
-      "description": "HDRezka (rezka.ag) - фільми та серіали, власна реалізація на основі реального HAR-аналізу трафіку",
-      "version": "1.0.0",
+      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми та серіали, усі озвучки, до 4K",
+      "version": "1.1.0",
       "author": "custom implementation, HAR-verified",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/rezka.js",
