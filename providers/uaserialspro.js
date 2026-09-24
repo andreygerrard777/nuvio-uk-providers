@@ -112,82 +112,102 @@ function add_(ah, al, bh, bl) {
   _rh = ((ah >>> 0) + (bh >>> 0) + carry) >>> 0;
 }
 
-function sha512(bytes) {
-  var ml = bytes.length * 8;
-  var msg = Array.from(bytes);
-  msg.push(0x80);
-  while (msg.length % 128 !== 112) msg.push(0);
-  for (var i = 0; i < 12; i++) msg.push(0); // upper 96 bits of length: always 0 for our message sizes
-  msg.push((ml >>> 24) & 0xff, (ml >>> 16) & 0xff, (ml >>> 8) & 0xff, ml & 0xff);
+// Module-scratch message schedule, reused across every block instead of allocating a fresh
+// Array(80) pair per call (that alloc happened twice per HMAC, ~4000 times per key derivation).
+var _whi = new Array(80), _wlo = new Array(80);
 
-  var Hhi = SHA512_H0_HI.slice(), Hlo = SHA512_H0_LO.slice();
-  var whi = new Array(80), wlo = new Array(80);
-
-  for (var b = 0; b < msg.length / 128; b++) {
-    for (var t = 0; t < 16; t++) {
-      var off = b * 128 + t * 8;
-      whi[t] = ((msg[off] << 24) | (msg[off + 1] << 16) | (msg[off + 2] << 8) | msg[off + 3]) >>> 0;
-      wlo[t] = ((msg[off + 4] << 24) | (msg[off + 5] << 16) | (msg[off + 6] << 8) | msg[off + 7]) >>> 0;
-    }
-    for (var t2 = 16; t2 < 80; t2++) {
-      rotr_(whi[t2 - 15], wlo[t2 - 15], 1); var a15h = _rh, a15l = _rl;
-      rotr_(whi[t2 - 15], wlo[t2 - 15], 8); var xh = (a15h ^ _rh) >>> 0, xl = (a15l ^ _rl) >>> 0;
-      shr_(whi[t2 - 15], wlo[t2 - 15], 7); var s0h = (xh ^ _rh) >>> 0, s0l = (xl ^ _rl) >>> 0;
-
-      rotr_(whi[t2 - 2], wlo[t2 - 2], 19); var a2h = _rh, a2l = _rl;
-      rotr_(whi[t2 - 2], wlo[t2 - 2], 61); var yh = (a2h ^ _rh) >>> 0, yl = (a2l ^ _rl) >>> 0;
-      shr_(whi[t2 - 2], wlo[t2 - 2], 6); var s1h = (yh ^ _rh) >>> 0, s1l = (yl ^ _rl) >>> 0;
-
-      add_(whi[t2 - 16], wlo[t2 - 16], s0h, s0l); var sumh = _rh, suml = _rl;
-      add_(sumh, suml, whi[t2 - 7], wlo[t2 - 7]); sumh = _rh; suml = _rl;
-      add_(sumh, suml, s1h, s1l); whi[t2] = _rh; wlo[t2] = _rl;
-    }
-    var ah = Hhi[0], al = Hlo[0], bh = Hhi[1], bl = Hlo[1], ch = Hhi[2], cl = Hlo[2], dh = Hhi[3], dl = Hlo[3];
-    var eh = Hhi[4], el = Hlo[4], fh = Hhi[5], fl = Hlo[5], gh = Hhi[6], gl = Hlo[6], hh = Hhi[7], hl = Hlo[7];
-    for (var t3 = 0; t3 < 80; t3++) {
-      rotr_(eh, el, 14); var e14h = _rh, e14l = _rl;
-      rotr_(eh, el, 18); var s1ah = (e14h ^ _rh) >>> 0, s1al = (e14l ^ _rl) >>> 0;
-      rotr_(eh, el, 41); var S1h = (s1ah ^ _rh) >>> 0, S1l = (s1al ^ _rl) >>> 0;
-
-      var Chh = ((eh & fh) ^ ((~eh) & gh)) >>> 0;
-      var Chl = ((el & fl) ^ ((~el) & gl)) >>> 0;
-
-      add_(hh, hl, S1h, S1l); var t1h = _rh, t1l = _rl;
-      add_(t1h, t1l, Chh, Chl); t1h = _rh; t1l = _rl;
-      add_(t1h, t1l, SHA512_K_HI[t3], SHA512_K_LO[t3]); t1h = _rh; t1l = _rl;
-      add_(t1h, t1l, whi[t3], wlo[t3]); var temp1h = _rh, temp1l = _rl;
-
-      rotr_(ah, al, 28); var a28h = _rh, a28l = _rl;
-      rotr_(ah, al, 34); var s0ah = (a28h ^ _rh) >>> 0, s0al = (a28l ^ _rl) >>> 0;
-      rotr_(ah, al, 39); var S0h = (s0ah ^ _rh) >>> 0, S0l = (s0al ^ _rl) >>> 0;
-
-      var Majh = ((ah & bh) ^ (ah & ch) ^ (bh & ch)) >>> 0;
-      var Majl = ((al & bl) ^ (al & cl) ^ (bl & cl)) >>> 0;
-
-      add_(S0h, S0l, Majh, Majl); var temp2h = _rh, temp2l = _rl;
-
-      hh = gh; hl = gl; gh = fh; gl = fl; fh = eh; fl = el;
-      add_(dh, dl, temp1h, temp1l); eh = _rh; el = _rl;
-      dh = ch; dl = cl; ch = bh; cl = bl; bh = ah; bl = al;
-      add_(temp1h, temp1l, temp2h, temp2l); ah = _rh; al = _rl;
-    }
-    add_(Hhi[0], Hlo[0], ah, al); Hhi[0] = _rh; Hlo[0] = _rl;
-    add_(Hhi[1], Hlo[1], bh, bl); Hhi[1] = _rh; Hlo[1] = _rl;
-    add_(Hhi[2], Hlo[2], ch, cl); Hhi[2] = _rh; Hlo[2] = _rl;
-    add_(Hhi[3], Hlo[3], dh, dl); Hhi[3] = _rh; Hlo[3] = _rl;
-    add_(Hhi[4], Hlo[4], eh, el); Hhi[4] = _rh; Hlo[4] = _rl;
-    add_(Hhi[5], Hlo[5], fh, fl); Hhi[5] = _rh; Hlo[5] = _rl;
-    add_(Hhi[6], Hlo[6], gh, gl); Hhi[6] = _rh; Hlo[6] = _rl;
-    add_(Hhi[7], Hlo[7], hh, hl); Hhi[7] = _rh; Hlo[7] = _rl;
+// Compress one 128-byte block at msg[base] into the running hash state (Hhi/Hlo), mutating it.
+// Factored out of sha512() so HMAC can resume from a precomputed ipad/opad block state.
+function sha512Block(Hhi, Hlo, msg, base) {
+  var whi = _whi, wlo = _wlo;
+  for (var t = 0; t < 16; t++) {
+    var off = base + t * 8;
+    whi[t] = ((msg[off] << 24) | (msg[off + 1] << 16) | (msg[off + 2] << 8) | msg[off + 3]) >>> 0;
+    wlo[t] = ((msg[off + 4] << 24) | (msg[off + 5] << 16) | (msg[off + 6] << 8) | msg[off + 7]) >>> 0;
   }
+  for (var t2 = 16; t2 < 80; t2++) {
+    rotr_(whi[t2 - 15], wlo[t2 - 15], 1); var a15h = _rh, a15l = _rl;
+    rotr_(whi[t2 - 15], wlo[t2 - 15], 8); var xh = (a15h ^ _rh) >>> 0, xl = (a15l ^ _rl) >>> 0;
+    shr_(whi[t2 - 15], wlo[t2 - 15], 7); var s0h = (xh ^ _rh) >>> 0, s0l = (xl ^ _rl) >>> 0;
+
+    rotr_(whi[t2 - 2], wlo[t2 - 2], 19); var a2h = _rh, a2l = _rl;
+    rotr_(whi[t2 - 2], wlo[t2 - 2], 61); var yh = (a2h ^ _rh) >>> 0, yl = (a2l ^ _rl) >>> 0;
+    shr_(whi[t2 - 2], wlo[t2 - 2], 6); var s1h = (yh ^ _rh) >>> 0, s1l = (yl ^ _rl) >>> 0;
+
+    add_(whi[t2 - 16], wlo[t2 - 16], s0h, s0l); var sumh = _rh, suml = _rl;
+    add_(sumh, suml, whi[t2 - 7], wlo[t2 - 7]); sumh = _rh; suml = _rl;
+    add_(sumh, suml, s1h, s1l); whi[t2] = _rh; wlo[t2] = _rl;
+  }
+  var ah = Hhi[0], al = Hlo[0], bh = Hhi[1], bl = Hlo[1], ch = Hhi[2], cl = Hlo[2], dh = Hhi[3], dl = Hlo[3];
+  var eh = Hhi[4], el = Hlo[4], fh = Hhi[5], fl = Hlo[5], gh = Hhi[6], gl = Hlo[6], hh = Hhi[7], hl = Hlo[7];
+  for (var t3 = 0; t3 < 80; t3++) {
+    rotr_(eh, el, 14); var e14h = _rh, e14l = _rl;
+    rotr_(eh, el, 18); var s1ah = (e14h ^ _rh) >>> 0, s1al = (e14l ^ _rl) >>> 0;
+    rotr_(eh, el, 41); var S1h = (s1ah ^ _rh) >>> 0, S1l = (s1al ^ _rl) >>> 0;
+
+    var Chh = ((eh & fh) ^ ((~eh) & gh)) >>> 0;
+    var Chl = ((el & fl) ^ ((~el) & gl)) >>> 0;
+
+    add_(hh, hl, S1h, S1l); var t1h = _rh, t1l = _rl;
+    add_(t1h, t1l, Chh, Chl); t1h = _rh; t1l = _rl;
+    add_(t1h, t1l, SHA512_K_HI[t3], SHA512_K_LO[t3]); t1h = _rh; t1l = _rl;
+    add_(t1h, t1l, whi[t3], wlo[t3]); var temp1h = _rh, temp1l = _rl;
+
+    rotr_(ah, al, 28); var a28h = _rh, a28l = _rl;
+    rotr_(ah, al, 34); var s0ah = (a28h ^ _rh) >>> 0, s0al = (a28l ^ _rl) >>> 0;
+    rotr_(ah, al, 39); var S0h = (s0ah ^ _rh) >>> 0, S0l = (s0al ^ _rl) >>> 0;
+
+    var Majh = ((ah & bh) ^ (ah & ch) ^ (bh & ch)) >>> 0;
+    var Majl = ((al & bl) ^ (al & cl) ^ (bl & cl)) >>> 0;
+
+    add_(S0h, S0l, Majh, Majl); var temp2h = _rh, temp2l = _rl;
+
+    hh = gh; hl = gl; gh = fh; gl = fl; fh = eh; fl = el;
+    add_(dh, dl, temp1h, temp1l); eh = _rh; el = _rl;
+    dh = ch; dl = cl; ch = bh; cl = bl; bh = ah; bl = al;
+    add_(temp1h, temp1l, temp2h, temp2l); ah = _rh; al = _rl;
+  }
+  add_(Hhi[0], Hlo[0], ah, al); Hhi[0] = _rh; Hlo[0] = _rl;
+  add_(Hhi[1], Hlo[1], bh, bl); Hhi[1] = _rh; Hlo[1] = _rl;
+  add_(Hhi[2], Hlo[2], ch, cl); Hhi[2] = _rh; Hlo[2] = _rl;
+  add_(Hhi[3], Hlo[3], dh, dl); Hhi[3] = _rh; Hlo[3] = _rl;
+  add_(Hhi[4], Hlo[4], eh, el); Hhi[4] = _rh; Hlo[4] = _rl;
+  add_(Hhi[5], Hlo[5], fh, fl); Hhi[5] = _rh; Hlo[5] = _rl;
+  add_(Hhi[6], Hlo[6], gh, gl); Hhi[6] = _rh; Hlo[6] = _rl;
+  add_(Hhi[7], Hlo[7], hh, hl); Hhi[7] = _rh; Hlo[7] = _rl;
+}
+
+function sha512StateToBytes(Hhi, Hlo) {
   var out = new Uint8Array(64);
-  for (var i2 = 0; i2 < 8; i2++) {
-    out[i2 * 8] = (Hhi[i2] >>> 24) & 0xff; out[i2 * 8 + 1] = (Hhi[i2] >>> 16) & 0xff;
-    out[i2 * 8 + 2] = (Hhi[i2] >>> 8) & 0xff; out[i2 * 8 + 3] = Hhi[i2] & 0xff;
-    out[i2 * 8 + 4] = (Hlo[i2] >>> 24) & 0xff; out[i2 * 8 + 5] = (Hlo[i2] >>> 16) & 0xff;
-    out[i2 * 8 + 6] = (Hlo[i2] >>> 8) & 0xff; out[i2 * 8 + 7] = Hlo[i2] & 0xff;
+  for (var i = 0; i < 8; i++) {
+    out[i * 8] = (Hhi[i] >>> 24) & 0xff; out[i * 8 + 1] = (Hhi[i] >>> 16) & 0xff;
+    out[i * 8 + 2] = (Hhi[i] >>> 8) & 0xff; out[i * 8 + 3] = Hhi[i] & 0xff;
+    out[i * 8 + 4] = (Hlo[i] >>> 24) & 0xff; out[i * 8 + 5] = (Hlo[i] >>> 16) & 0xff;
+    out[i * 8 + 6] = (Hlo[i] >>> 8) & 0xff; out[i * 8 + 7] = Hlo[i] & 0xff;
   }
   return out;
+}
+
+// Finalize a hash whose first `prefixLen` bytes were already absorbed into (Hhi,Hlo) as whole
+// 128-byte blocks: append `tail`, the 0x80/zero padding and the 128-bit total-length field, then
+// process the remaining block(s). (Hhi,Hlo) is copied, not mutated, so a precomputed ipad/opad
+// state can be reused across calls.
+function sha512Continue(Hhi, Hlo, prefixLen, tail) {
+  var total = prefixLen + tail.length;
+  var msg = [];
+  for (var i = 0; i < tail.length; i++) msg.push(tail[i]);
+  msg.push(0x80);
+  while (msg.length % 128 !== 112) msg.push(0);
+  var ml = total * 8;
+  for (var z = 0; z < 12; z++) msg.push(0); // upper 96 bits of length: 0 for our message sizes
+  msg.push((ml >>> 24) & 0xff, (ml >>> 16) & 0xff, (ml >>> 8) & 0xff, ml & 0xff);
+  var hi = Hhi.slice(), lo = Hlo.slice();
+  for (var b = 0; b < msg.length / 128; b++) sha512Block(hi, lo, msg, b * 128);
+  return sha512StateToBytes(hi, lo);
+}
+
+function sha512(bytes) {
+  return sha512Continue(SHA512_H0_HI, SHA512_H0_LO, 0, bytes);
 }
 
 function concatBytes() {
@@ -199,19 +219,29 @@ function concatBytes() {
   return out;
 }
 
-function hmacSha512(keyBytes, msgBytes) {
-  var blockSize = 128;
-  var key = keyBytes;
-  if (key.length > blockSize) key = sha512(key);
-  if (key.length < blockSize) { var k2 = new Uint8Array(blockSize); k2.set(key); key = k2; }
-  var opad = new Uint8Array(blockSize), ipad = new Uint8Array(blockSize);
-  for (var i = 0; i < blockSize; i++) { opad[i] = key[i] ^ 0x5c; ipad[i] = key[i] ^ 0x36; }
-  var inner = sha512(concatBytes(ipad, msgBytes));
-  return sha512(concatBytes(opad, inner));
-}
-
+// PBKDF2-HMAC-SHA512 with the HMAC key-block states precomputed once. The passphrase is fixed,
+// so the ipad/opad 128-byte blocks - and thus the SHA-512 state after absorbing each - are
+// identical for all 999 iterations. Precomputing them lets every HMAC skip re-hashing those two
+// blocks, roughly halving the SHA-512 compressions in the hot loop (each HMAC drops from 4
+// compressions to 2 for the 64-byte inputs the iteration uses). Output verified byte-for-byte
+// against Python's hashlib.pbkdf2_hmac and the site's own CryptoJS on real ciphertext.
 function pbkdf2HmacSha512(passBytes, saltBytes, iterations, keyLenBytes) {
-  var hLen = 64;
+  var hLen = 64, blockSize = 128;
+  var key = passBytes;
+  if (key.length > blockSize) key = sha512(key);
+  var kb = new Uint8Array(blockSize); kb.set(key);
+  var ipad = new Uint8Array(blockSize), opad = new Uint8Array(blockSize);
+  for (var i = 0; i < blockSize; i++) { ipad[i] = kb[i] ^ 0x36; opad[i] = kb[i] ^ 0x5c; }
+  var ipadHi = SHA512_H0_HI.slice(), ipadLo = SHA512_H0_LO.slice();
+  sha512Block(ipadHi, ipadLo, ipad, 0);
+  var opadHi = SHA512_H0_HI.slice(), opadLo = SHA512_H0_LO.slice();
+  sha512Block(opadHi, opadLo, opad, 0);
+
+  function hmac(msgBytes) {
+    var inner = sha512Continue(ipadHi, ipadLo, blockSize, msgBytes);
+    return sha512Continue(opadHi, opadLo, blockSize, inner);
+  }
+
   var numBlocks = Math.ceil(keyLenBytes / hLen);
   var out = new Uint8Array(numBlocks * hLen);
   for (var blockIndex = 1; blockIndex <= numBlocks; blockIndex++) {
@@ -220,11 +250,11 @@ function pbkdf2HmacSha512(passBytes, saltBytes, iterations, keyLenBytes) {
     intBlock[1] = (blockIndex >>> 16) & 0xff;
     intBlock[2] = (blockIndex >>> 8) & 0xff;
     intBlock[3] = blockIndex & 0xff;
-    var u = hmacSha512(passBytes, concatBytes(saltBytes, intBlock));
+    var u = hmac(concatBytes(saltBytes, intBlock));
     var t = u.slice();
     for (var iter = 1; iter < iterations; iter++) {
-      u = hmacSha512(passBytes, u);
-      for (var i = 0; i < t.length; i++) t[i] ^= u[i];
+      u = hmac(u);
+      for (var k = 0; k < t.length; k++) t[k] ^= u[k];
     }
     out.set(t, (blockIndex - 1) * hLen);
   }
