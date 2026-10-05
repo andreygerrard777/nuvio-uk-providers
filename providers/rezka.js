@@ -664,17 +664,18 @@ function isPremiumOnly(data, qualities) {
   return qualities.length > 1 && Object.keys(files).length === 1;
 }
 
-// Each quality comes with mirror URLs: HLS on prx*-cogent.ukrtelcdn.net, HLS on voidboost, then
-// the same file as plain mp4 on both. Measured live: HLS manifests are packaged on the fly -
-// ukrtelcdn answered 502 in ~10% of tries, voidboost sometimes took 16 s (the player sits on
-// "buffering"). The mp4 files are static (moov at the start): every check answered in ~1.5 s,
-// seeking works. So the mp4 is handed to the player, voidboost first; HLS only as a fallback.
+// Each quality comes with mirror URLs: HLS on prx*-cogent.ukrtelcdn.net (a Ukrainian CDN), HLS
+// on voidboost, then the same file as plain mp4 on both. HLS manifests are packaged on the fly
+// (ukrtelcdn answered 502 on ~10-15% of opens), while the mp4 files are static, seekable and
+// answered every check. On real devices in Ukraine voidboost was the slow one (long buffering),
+// ukrtelcdn the fast one. So: ukrtelcdn mp4, ukrtelcdn HLS, then anything else.
 function preferredUrl(urls) {
   function isMp4(u) { return /\.mp4$/.test(u.split('?')[0]); }
+  function fastCdn(u) { return !/voidboost/.test(u); }
   var order = [
-    function (u) { return isMp4(u) && /voidboost/.test(u); },
-    isMp4,
-    function (u) { return /voidboost/.test(u); }
+    function (u) { return isMp4(u) && fastCdn(u); },
+    fastCdn,
+    isMp4
   ];
   for (var k = 0; k < order.length; k++) {
     for (var i = 0; i < urls.length; i++) if (order[k](urls[i])) return urls[i];
@@ -752,7 +753,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
   _trace = [];
   _started = Date.now();
   DEBUG = String(tmdbId) === DEBUG_TMDB_ID;
-  trace('v2.4.0 ' + mediaType + ' ' + tmdbId);
+  trace('v2.5.0 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     trace('tmdb ' + info.year + ' ' + info.originalTitle);
     if (!info.title) return [];
