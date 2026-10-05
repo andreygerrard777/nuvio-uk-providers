@@ -706,19 +706,22 @@ function resolveStreams(page, season, episode) {
 
 function diagnose(streams) {
   if (!DEBUG || (streams && streams.length)) return streams || [];
-  return [{
-    name: 'HDRezka',
-    title: 'DEBUG ' + _trace.join(' | ').slice(0, 900),
-    url: 'https://rezka.ag/#debug',
-    quality: 'debug'
-  }];
+  // One short entry per step: Nuvio shows a single line per result, so a long title is cut off.
+  return _trace.map(function (step, i) {
+    return {
+      name: 'HDRezka',
+      title: (i < 10 ? '0' : '') + i + ' ' + String(step).slice(0, 70),
+      url: 'https://rezka.ag/#debug-' + i,
+      quality: 'debug'
+    };
+  });
 }
 
 function getStreams(tmdbId, mediaType, season, episode) {
   _trace = [];
-  trace('v2.0.1 ' + mediaType + ' ' + tmdbId);
+  trace('v2.0.2 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
-    trace('tmdb:' + info.title + '/' + info.originalTitle + '/' + info.year);
+    trace('tmdb ' + info.year + ' ' + info.originalTitle);
     if (!info.title) return [];
     var queries = [info.title];
     if (info.originalTitle && info.originalTitle !== info.title) queries.push(info.originalTitle);
@@ -728,7 +731,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var query = queries[q++];
       return searchAnyDomain(query).then(function (found) {
         var match = found && pickBestMatch(found.results, info, mediaType);
-        trace('found:' + (found ? found.domain + ' ' + found.results.length : 'none') + ' match:' + (match ? match.href.replace(/^https?:\/\/[^\/]+/, '') : '-'));
+        trace('found ' + (found ? found.domain + ' n=' + found.results.length : 'none') + ' ' + (match ? match.href.replace(/^https?:\/\/[^\/]+/, '').slice(0, 40) : 'nomatch'));
         if (match) return { domain: found.domain, match: match };
         return searchNext();
       });
@@ -736,7 +739,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
     return searchNext().then(function (hit) {
       if (!hit) { log('no match for ' + info.title + ' (' + info.year + ')'); return []; }
       return resolveContentPage(hit.domain, hit.match.href).then(function (page) {
-        trace('page:' + page.domain + ' dubs=' + page.translators.length + ' series=' + page.isSeries + ' favs=' + !!page.favs);
+        trace('page ' + page.domain + ' dubs=' + page.translators.length + ' ser=' + page.isSeries + ' favs=' + !!page.favs);
         return resolveStreams(page, season, episode);
       });
     });
