@@ -23,7 +23,18 @@ var DEFAULT_OFFSET = 1;       // label overstatement measured on every title che
 var LADDER = [240, 360, 480, 720, 1080, 1440, 2160];
 var RETRYABLE = { 429: 1, 500: 1, 502: 1, 503: 1, 504: 1 };
 
+// TEMPORARY (2.0.1): when a lookup ends with no streams, a single diagnostic entry carrying this
+// trace is returned so the failing step is visible in Nuvio's provider test on the phone.
+var DEBUG = true;
+var _trace = [];
+
+function trace(step) {
+  _trace.push(step);
+  if (_trace.length > 40) _trace.shift();
+}
+
 function log(msg) {
+  trace(msg);
   try { console.log('[Rezka] ' + msg); } catch (e) { /* no console */ }
 }
 
@@ -91,9 +102,18 @@ function requestOnce(domain, url, opts, ms) {
   var headers = Object.assign({}, opts.headers);
   var ck = _cookieMode[domain] === 'manual' ? cookieHeader(domain) : '';
   if (ck) headers.Cookie = ck;
+  var what = /search\.php/.test(url) ? 'search' : /pass-challenge/.test(url) ? 'pass'
+    : /get_cdn_series/.test(url) ? 'ajax' : 'get';
   return fetchWithTimeout(url, Object.assign({}, opts, { headers: headers }), ms).then(function (res) {
     storeCookies(domain, res);
-    return res.text().then(function (text) { return { status: res.status, text: text || '' }; });
+    return res.text().then(function (text) {
+      text = text || '';
+      trace(what + ':' + res.status + (isChallenge(text) ? 'A' : '') + (ck ? 'c' : '') + (res.headers && res.headers.get && res.headers.get('set-cookie') ? 's' : ''));
+      return { status: res.status, text: text };
+    });
+  }, function (e) {
+    trace(what + ':ERR ' + (e && e.message ? String(e.message).slice(0, 60) : e));
+    throw e;
   });
 }
 
@@ -352,7 +372,8 @@ function searchOnDomain(domain, query) {
       body: 'q=' + encodeURIComponent(query)
     }, 10000);
   }).then(function (r) {
-    if (r.status >= 400) throw new Error('search failed: ' + r.status);
+    // Status 0 = no connection at all (blocked host, DNS): try the next mirror.
+    if (r.status < 200 || r.status >= 400) throw new Error('search failed: ' + r.status);
     return parseSearchResults(r.text, domain);
   });
 }
@@ -595,6 +616,7 @@ function realQuality(labeled, offset) {
 
 // Reads the first 64 KiB of the best-labelled mp4 once per lookup; DEFAULT_OFFSET on any failure.
 function measureOffset(qualities) {
+  trace('measure');
   var top = qualities.slice().sort(function (a, b) { return b.quality - a.quality; })[0];
   if (!top || !top.mp4) return Promise.resolve(DEFAULT_OFFSET);
   return fetchWithTimeout(top.mp4, { headers: { 'User-Agent': UA, 'Range': 'bytes=0-65535' } }, 8000)
@@ -602,6 +624,7 @@ function measureOffset(qualities) {
       if (res.status !== 200 && res.status !== 206) return DEFAULT_OFFSET;
       return res.arrayBuffer().then(function (buf) {
         var w = mp4Width(new Uint8Array(buf));
+        trace('mp4:' + res.status + ' w=' + w);
         return w ? labelOffset(top.quality, qualityOfWidth(w)) : DEFAULT_OFFSET;
       });
     })
@@ -681,8 +704,21 @@ function resolveStreams(page, season, episode) {
 
 // --- Entry point -------------------------------------------------------------
 
+function diagnose(streams) {
+  if (!DEBUG || (streams && streams.length)) return streams || [];
+  return [{
+    name: 'HDRezka',
+    title: 'DEBUG ' + _trace.join(' | ').slice(0, 900),
+    url: 'https://rezka.ag/#debug',
+    quality: 'debug'
+  }];
+}
+
 function getStreams(tmdbId, mediaType, season, episode) {
+  _trace = [];
+  trace('v2.0.1 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
+    trace('tmdb:' + info.title + '/' + info.originalTitle + '/' + info.year);
     if (!info.title) return [];
     var queries = [info.title];
     if (info.originalTitle && info.originalTitle !== info.title) queries.push(info.originalTitle);
@@ -692,6 +728,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var query = queries[q++];
       return searchAnyDomain(query).then(function (found) {
         var match = found && pickBestMatch(found.results, info, mediaType);
+        trace('found:' + (found ? found.domain + ' ' + found.results.length : 'none') + ' match:' + (match ? match.href.replace(/^https?:\/\/[^\/]+/, '') : '-'));
         if (match) return { domain: found.domain, match: match };
         return searchNext();
       });
@@ -699,13 +736,14 @@ function getStreams(tmdbId, mediaType, season, episode) {
     return searchNext().then(function (hit) {
       if (!hit) { log('no match for ' + info.title + ' (' + info.year + ')'); return []; }
       return resolveContentPage(hit.domain, hit.match.href).then(function (page) {
+        trace('page:' + page.domain + ' dubs=' + page.translators.length + ' series=' + page.isSeries + ' favs=' + !!page.favs);
         return resolveStreams(page, season, episode);
       });
     });
   }).catch(function (e) {
     log('failed: ' + (e && e.message));
     return [];
-  });
+  }).then(diagnose);
 }
 
 module.exports = { getStreams: getStreams };
