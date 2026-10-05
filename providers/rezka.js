@@ -22,7 +22,8 @@ var DOMAINS = ['rezka.ag', 'rezka-tv.org'];
 // the auth cookie would be lost; identifying as what the request really is - Nuvio's OkHttp
 // client - gets the pages directly. The Anubis solver below stays as a fallback.
 var UA = 'okhttp/4.12.0';
-var PARALLEL = 4;             // the site answers 503 when hammered
+var PARALLEL = 6;             // the site answers 503 when hammered harder than this
+var BUDGET_MS = 40000;        // stop asking for more dubs after this; Nuvio drops everything at 60 s
 var DEFAULT_OFFSET = 1;       // label overstatement measured on every title checked live
 var LADDER = [240, 360, 480, 720, 1080, 1440, 2160];
 var RETRYABLE = { 429: 1, 500: 1, 502: 1, 503: 1, 504: 1 };
@@ -32,6 +33,7 @@ var RETRYABLE = { 429: 1, 500: 1, 502: 1, 503: 1, 504: 1 };
 var DEBUG_TMDB_ID = '603';
 var DEBUG = false;
 var _trace = [];
+var _started = 0;
 
 function trace(step) {
   _trace.push(step);
@@ -663,29 +665,14 @@ function isPremiumOnly(data, qualities) {
 }
 
 // Each quality comes with mirror URLs: HLS on prx*-cogent.ukrtelcdn.net, HLS on voidboost, then
-// the same file as plain mp4 on both. The ukrtelcdn HLS manifests are packaged on the fly and
-// now and then answer 502, so the first mirror that really serves is used: an HLS manifest
-// must come back as "#EXTM3U", an mp4 must answer a one-byte range request.
-function firstWorkingUrl(urls) {
-  var i = 0;
-  function next() {
-    if (i >= urls.length) return Promise.resolve(null);
-    var u = urls[i++];
-    var hls = /\.m3u8$/.test(u.split('?')[0]);
-    var opts = { headers: hls ? { 'User-Agent': UA } : { 'User-Agent': UA, 'Range': 'bytes=0-0' } };
-    return fetch(u, opts).then(function (res) {
-      if (hls) {
-        if (res.status !== 200) return false;
-        return res.text().then(function (t) { return /^\s*#EXTM3U/.test(t || ''); });
-      }
-      return res.status === 200 || res.status === 206;
-    }, function () { return false; }).then(function (ok) {
-      if (ok) return u;
-      trace('mirror ' + u.split('/')[2] + ' down');
-      return next();
-    });
+// the same file as plain mp4 on both. Measured live: the ukrtelcdn manifests are packaged on the
+// fly and answered 502 in ~10% of tries, voidboost in none of 89, at the same speed. Checking a
+// mirror costs ~1.5 s per dub (that packaging), so voidboost HLS is simply preferred.
+function preferredUrl(urls) {
+  for (var i = 0; i < urls.length; i++) {
+    if (/voidboost/.test(urls[i]) && /\.m3u8$/.test(urls[i].split('?')[0])) return urls[i];
   }
-  return next();
+  return urls[0];
 }
 
 function buildStreams(page, t, data, offsetPromise) {
@@ -695,8 +682,7 @@ function buildStreams(page, t, data, offsetPromise) {
   return offsetPromise(qualities).then(function (offset) {
     // One link per dub, its best real quality: lower rungs of the same dub only bloat the list.
     var best = qualities.slice().sort(function (a, b) { return b.quality - a.quality; })[0];
-    return firstWorkingUrl(best.urls).then(function (url) {
-      if (!url) return [];
+    return Promise.resolve(preferredUrl(best.urls)).then(function (url) {
       var quality = realQuality(best.quality, offset);
       // Nuvio's source card shows `name` (falling back to `title`) and sorts a provider's
       // cards alphabetically by it, so the dub goes into `name`, and Ukrainian dubs get a "(UA)"
@@ -727,6 +713,8 @@ function resolveStreams(page, season, episode) {
   }
   var series = page.isSeries && season && episode;
   return mapLimit(page.translators, PARALLEL, function (t) {
+    // Slow network or a runtime that runs requests one by one (Nuvio TV): keep what is found.
+    if (Date.now() - _started > BUDGET_MS) { trace('budget: skipped ' + t.label); return []; }
     var params = series
       ? { id: t.id, translator_id: t.translatorId, season: season, episode: episode, action: 'get_stream' }
       : { id: t.id, translator_id: t.translatorId, is_camrip: t.camrip, is_ads: t.ads, is_director: t.director, action: 'get_movie' };
@@ -755,8 +743,9 @@ function diagnose(streams) {
 
 function getStreams(tmdbId, mediaType, season, episode) {
   _trace = [];
+  _started = Date.now();
   DEBUG = String(tmdbId) === DEBUG_TMDB_ID;
-  trace('v2.2.0 ' + mediaType + ' ' + tmdbId);
+  trace('v2.3.0 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     trace('tmdb ' + info.year + ' ' + info.originalTitle);
     if (!info.title) return [];
