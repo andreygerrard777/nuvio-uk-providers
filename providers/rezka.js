@@ -665,12 +665,19 @@ function isPremiumOnly(data, qualities) {
 }
 
 // Each quality comes with mirror URLs: HLS on prx*-cogent.ukrtelcdn.net, HLS on voidboost, then
-// the same file as plain mp4 on both. Measured live: the ukrtelcdn manifests are packaged on the
-// fly and answered 502 in ~10% of tries, voidboost in none of 89, at the same speed. Checking a
-// mirror costs ~1.5 s per dub (that packaging), so voidboost HLS is simply preferred.
+// the same file as plain mp4 on both. Measured live: HLS manifests are packaged on the fly -
+// ukrtelcdn answered 502 in ~10% of tries, voidboost sometimes took 16 s (the player sits on
+// "buffering"). The mp4 files are static (moov at the start): every check answered in ~1.5 s,
+// seeking works. So the mp4 is handed to the player, voidboost first; HLS only as a fallback.
 function preferredUrl(urls) {
-  for (var i = 0; i < urls.length; i++) {
-    if (/voidboost/.test(urls[i]) && /\.m3u8$/.test(urls[i].split('?')[0])) return urls[i];
+  function isMp4(u) { return /\.mp4$/.test(u.split('?')[0]); }
+  var order = [
+    function (u) { return isMp4(u) && /voidboost/.test(u); },
+    isMp4,
+    function (u) { return /voidboost/.test(u); }
+  ];
+  for (var k = 0; k < order.length; k++) {
+    for (var i = 0; i < urls.length; i++) if (order[k](urls[i])) return urls[i];
   }
   return urls[0];
 }
@@ -745,7 +752,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
   _trace = [];
   _started = Date.now();
   DEBUG = String(tmdbId) === DEBUG_TMDB_ID;
-  trace('v2.3.0 ' + mediaType + ' ' + tmdbId);
+  trace('v2.4.0 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     trace('tmdb ' + info.year + ' ' + info.originalTitle);
     if (!info.title) return [];
