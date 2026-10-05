@@ -673,13 +673,19 @@ function buildStreams(page, t, data, offsetPromise) {
     // One link per dub, its best real quality: lower rungs of the same dub only bloat the list.
     var best = real.slice().sort(function (a, b) { return b.quality - a.quality; })[0];
     return [best].map(function (q) {
+      // Nuvio's source card shows `name` (falling back to `title`) and sorts a provider's
+      // cards alphabetically by it, so the dub goes into `name`, and Ukrainian dubs get a "(UA)"
+      // prefix: "(" sorts before every letter, keeping them on top. The group header already
+      // says HDRezka.
+      var label = t.ukrainian ? '(UA) ' + t.label.replace(/\s*\((Украинский|Український)\)\s*$/i, '') : t.label;
       var stream = {
-        name: 'HDRezka',
+        name: label,
         title: t.label + ' · ' + q.quality + 'p',
         url: q.url,
         quality: q.quality + 'p',
         headers: { 'Referer': 'https://' + page.domain + '/', 'User-Agent': UA }
       };
+      if (t.ukrainian) stream.language = 'UA';
       if (subtitles.length) stream.subtitles = subtitles;
       return stream;
     });
@@ -725,7 +731,7 @@ function diagnose(streams) {
 function getStreams(tmdbId, mediaType, season, episode) {
   _trace = [];
   DEBUG = String(tmdbId) === DEBUG_TMDB_ID;
-  trace('v2.1.0 ' + mediaType + ' ' + tmdbId);
+  trace('v2.1.1 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     trace('tmdb ' + info.year + ' ' + info.originalTitle);
     if (!info.title) return [];
