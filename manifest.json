@@ -111,7 +111,7 @@
       "id": "rezka",
       "name": "HDRezka",
       "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми, серіали, мультфільми, аніме; усі озвучки (українські першими), по одному посиланню 720p на озвучку, субтитри",
-      "version": "2.3.0",
+      "version": "2.4.0",
       "author": "nuvio-uk-providers, live-verified",
       "supportedTypes": [
         "movie",
@@ -121,6 +121,7 @@
       "enabled": true,
       "hasSettings": false,
       "formats": [
+        "mp4",
         "m3u8"
       ],
       "logo": "https://www.google.com/s2/favicons?domain=rezka.ag&sz=128",
