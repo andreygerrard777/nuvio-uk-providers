@@ -559,7 +559,7 @@ function parseQualityList(raw) {
     if (!label || !urls.length || seen[urls[0]]) continue;
     seen[urls[0]] = true;
     var mp4 = urls.filter(function (u) { return /\.mp4$/.test(u.split('?')[0]); })[0] || null;
-    out.push({ quality: labelQuality(label), url: urls[0], mp4: mp4 });
+    out.push({ quality: labelQuality(label), url: urls[0], urls: urls, mp4: mp4 });
   }
   return out;
 }
@@ -662,17 +662,42 @@ function isPremiumOnly(data, qualities) {
   return qualities.length > 1 && Object.keys(files).length === 1;
 }
 
+// Each quality comes with mirror URLs: HLS on prx*-cogent.ukrtelcdn.net, HLS on voidboost, then
+// the same file as plain mp4 on both. The ukrtelcdn HLS manifests are packaged on the fly and
+// now and then answer 502, so the first mirror that really serves is used: an HLS manifest
+// must come back as "#EXTM3U", an mp4 must answer a one-byte range request.
+function firstWorkingUrl(urls) {
+  var i = 0;
+  function next() {
+    if (i >= urls.length) return Promise.resolve(null);
+    var u = urls[i++];
+    var hls = /\.m3u8$/.test(u.split('?')[0]);
+    var opts = { headers: hls ? { 'User-Agent': UA } : { 'User-Agent': UA, 'Range': 'bytes=0-0' } };
+    return fetch(u, opts).then(function (res) {
+      if (hls) {
+        if (res.status !== 200) return false;
+        return res.text().then(function (t) { return /^\s*#EXTM3U/.test(t || ''); });
+      }
+      return res.status === 200 || res.status === 206;
+    }, function () { return false; }).then(function (ok) {
+      if (ok) return u;
+      trace('mirror ' + u.split('/')[2] + ' down');
+      return next();
+    });
+  }
+  return next();
+}
+
 function buildStreams(page, t, data, offsetPromise) {
   var qualities = parseQualityList(data && data.url);
   if (!qualities.length || isPremiumOnly(data, qualities)) return Promise.resolve([]);
   var subtitles = parseSubtitles(data.subtitle, data.subtitle_lns);
   return offsetPromise(qualities).then(function (offset) {
-    var real = qualities.map(function (q) {
-      return { quality: realQuality(q.quality, offset), url: q.url };
-    });
     // One link per dub, its best real quality: lower rungs of the same dub only bloat the list.
-    var best = real.slice().sort(function (a, b) { return b.quality - a.quality; })[0];
-    return [best].map(function (q) {
+    var best = qualities.slice().sort(function (a, b) { return b.quality - a.quality; })[0];
+    return firstWorkingUrl(best.urls).then(function (url) {
+      if (!url) return [];
+      var quality = realQuality(best.quality, offset);
       // Nuvio's source card shows `name` (falling back to `title`) and sorts a provider's
       // cards alphabetically by it, so the dub goes into `name`, and Ukrainian dubs get a "(UA)"
       // prefix: "(" sorts before every letter, keeping them on top. The group header already
@@ -680,14 +705,14 @@ function buildStreams(page, t, data, offsetPromise) {
       var label = t.ukrainian ? '(UA) ' + t.label.replace(/\s*\((Украинский|Український)\)\s*$/i, '') : t.label;
       var stream = {
         name: label,
-        title: t.label + ' · ' + q.quality + 'p',
-        url: q.url,
-        quality: q.quality + 'p',
+        title: t.label + ' · ' + quality + 'p',
+        url: url,
+        quality: quality + 'p',
         headers: { 'Referer': 'https://' + page.domain + '/', 'User-Agent': UA }
       };
       if (t.ukrainian) stream.language = 'UA';
       if (subtitles.length) stream.subtitles = subtitles;
-      return stream;
+      return [stream];
     });
   });
 }
@@ -731,7 +756,7 @@ function diagnose(streams) {
 function getStreams(tmdbId, mediaType, season, episode) {
   _trace = [];
   DEBUG = String(tmdbId) === DEBUG_TMDB_ID;
-  trace('v2.1.1 ' + mediaType + ' ' + tmdbId);
+  trace('v2.2.0 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     trace('tmdb ' + info.year + ' ' + info.originalTitle);
     if (!info.title) return [];
