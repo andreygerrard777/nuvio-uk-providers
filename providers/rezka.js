@@ -17,15 +17,20 @@
 
 var TMDB_API_KEY = '439c478a771f35c05022f9feabcca01c'; // shared community demo key; swap for your own free key from themoviedb.org if you get rate-limited
 var DOMAINS = ['rezka.ag', 'rezka-tv.org'];
-var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
+// Anubis on Rezka (like its default policy) only challenges clients that claim to be a browser
+// ("Mozilla/..."). Nuvio Mobile follows the pass-challenge 302 itself and has no cookie jar, so
+// the auth cookie would be lost; identifying as what the request really is - Nuvio's OkHttp
+// client - gets the pages directly. The Anubis solver below stays as a fallback.
+var UA = 'okhttp/4.12.0';
 var PARALLEL = 4;             // the site answers 503 when hammered
 var DEFAULT_OFFSET = 1;       // label overstatement measured on every title checked live
 var LADDER = [240, 360, 480, 720, 1080, 1440, 2160];
 var RETRYABLE = { 429: 1, 500: 1, 502: 1, 503: 1, 504: 1 };
 
-// TEMPORARY (2.0.1): when a lookup ends with no streams, a single diagnostic entry carrying this
-// trace is returned so the failing step is visible in Nuvio's provider test on the phone.
-var DEBUG = true;
+// When Nuvio's provider test (always The Matrix, TMDB 603) finds no streams, the trace is returned
+// as one entry per step, so the failing step is visible on the device. Never in normal lookups.
+var DEBUG_TMDB_ID = '603';
+var DEBUG = false;
 var _trace = [];
 
 function trace(step) {
@@ -719,7 +724,8 @@ function diagnose(streams) {
 
 function getStreams(tmdbId, mediaType, season, episode) {
   _trace = [];
-  trace('v2.0.2 ' + mediaType + ' ' + tmdbId);
+  DEBUG = String(tmdbId) === DEBUG_TMDB_ID;
+  trace('v2.1.0 ' + mediaType + ' ' + tmdbId);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     trace('tmdb ' + info.year + ' ' + info.originalTitle);
     if (!info.title) return [];
