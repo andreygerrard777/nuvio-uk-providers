@@ -8,13 +8,20 @@
       "description": "UAFLIX - фільми і серіали українською (порт з CloudStream)",
       "version": "1.0.0",
       "author": "ported from CakesTwix/cloudstream-extensions-uk",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/uaflix.js",
       "enabled": true,
       "hasSettings": false,
-      "formats": ["m3u8"],
+      "formats": [
+        "m3u8"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=uafix.net&sz=128",
-      "contentLanguage": ["uk"]
+      "contentLanguage": [
+        "uk"
+      ]
     },
     {
       "id": "uakino",
@@ -22,13 +29,20 @@
       "description": "Uakino - фільми та серіали українською (порт з CloudStream, потребує перевірки через Cloudflare)",
       "version": "1.0.0",
       "author": "ported from CakesTwix/cloudstream-extensions-uk",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/uakino.js",
       "enabled": true,
       "hasSettings": false,
-      "formats": ["m3u8"],
+      "formats": [
+        "m3u8"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=uakino.best&sz=128",
-      "contentLanguage": ["uk"]
+      "contentLanguage": [
+        "uk"
+      ]
     },
     {
       "id": "klontv",
@@ -36,13 +50,20 @@
       "description": "KlonTV - фільми, серіали, мультфільми та аніме українською (порт з CloudStream)",
       "version": "1.0.0",
       "author": "ported from CakesTwix/cloudstream-extensions-uk",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/klontv.js",
       "enabled": true,
       "hasSettings": false,
-      "formats": ["m3u8"],
+      "formats": [
+        "m3u8"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=klonua.com&sz=128",
-      "contentLanguage": ["uk"]
+      "contentLanguage": [
+        "uk"
+      ]
     },
     {
       "id": "kinotron",
@@ -50,13 +71,20 @@
       "description": "KinoTron - фільми, серіали, мультфільми та аніме українською (порт з CloudStream)",
       "version": "1.0.0",
       "author": "ported from CakesTwix/cloudstream-extensions-uk",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/kinotron.js",
       "enabled": true,
       "hasSettings": false,
-      "formats": ["m3u8"],
+      "formats": [
+        "m3u8"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=kinotron.tv&sz=128",
-      "contentLanguage": ["uk"]
+      "contentLanguage": [
+        "uk"
+      ]
     },
     {
       "id": "uaserialspro",
@@ -64,13 +92,42 @@
       "description": "UASerialsPro - серіали, мультсеріали, аніме та фільми українською (порт з CloudStream, з власною AES-розшифровкою)",
       "version": "1.0.0",
       "author": "ported from CakesTwix/cloudstream-extensions-uk",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/uaserialspro.js",
       "enabled": true,
       "hasSettings": false,
-      "formats": ["m3u8"],
+      "formats": [
+        "m3u8"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=uaserials.com&sz=128",
-      "contentLanguage": ["uk"]
+      "contentLanguage": [
+        "uk"
+      ]
+    },
+    {
+      "id": "rezka",
+      "name": "HDRezka",
+      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми, серіали, мультфільми, аніме; усі озвучки (українські першими), по одному посиланню 720p на озвучку, субтитри",
+      "version": "2.0.0",
+      "author": "nuvio-uk-providers, live-verified",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/rezka.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=rezka.ag&sz=128",
+      "contentLanguage": [
+        "uk",
+        "ru"
+      ]
     }
   ]
 }
