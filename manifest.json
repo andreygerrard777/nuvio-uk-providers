@@ -110,9 +110,9 @@
     {
       "id": "rezka",
       "name": "HDRezka",
-      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми та серіали, усі озвучки (українські першими), субтитри",
+      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми, серіали, мультфільми, аніме; усі озвучки (українські першими), по одному посиланню 720p на озвучку, субтитри",
       "version": "2.5.0",
-      "author": "custom implementation, HAR-verified",
+      "author": "nuvio-uk-providers, live-verified",
       "supportedTypes": [
         "movie",
         "tv"
@@ -121,11 +121,12 @@
       "enabled": true,
       "hasSettings": false,
       "formats": [
-        "m3u8",
-        "mp4"
+        "mp4",
+        "m3u8"
       ],
       "logo": "https://www.google.com/s2/favicons?domain=rezka.ag&sz=128",
       "contentLanguage": [
+        "uk",
         "ru"
       ]
     }
