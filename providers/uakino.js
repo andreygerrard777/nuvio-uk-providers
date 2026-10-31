@@ -36,8 +36,26 @@ function ajaxHeaders() {
   return { Referer: BASE, 'X-Requested-With': 'XMLHttpRequest', 'User-Agent': UA };
 }
 
+// Temporary diagnostics: Nuvio TV (Tizen/webOS) shows plugin console.warn output under
+// Settings > About > Console debug. Set DEBUG to false once the Tizen issue is understood.
+var DEBUG = true;
+function dbg() {
+  if (!DEBUG) return;
+  try { console.warn.apply(console, ['[uakino]'].concat(Array.prototype.slice.call(arguments))); } catch (e) {}
+}
+
+function logResponse(method, url, r, text) {
+  if (!DEBUG) return;
+  var cf = (r && r.headers && r.headers.get && r.headers.get('cf-mitigated')) || '';
+  var challenged = /Just a moment|challenge-platform|cf-chl|cf_chl/i.test(String(text || '').slice(0, 6000));
+  dbg(method, String(url).slice(0, 90), 'status=' + (r && r.status), 'len=' + String(text || '').length,
+    cf ? 'cf-mitigated=' + cf : '', challenged ? 'CLOUDFLARE-CHALLENGE' : '');
+}
+
 function fetchHtml(url, headers) {
-  return fetch(url, { headers: headers || baseHeaders() }).then(function (r) { return r.text(); });
+  return fetch(url, { headers: headers || baseHeaders() }).then(function (r) {
+    return r.text().then(function (t) { logResponse('GET', url, r, t); return t; });
+  });
 }
 
 function normalize(s) {
@@ -164,7 +182,13 @@ function searchUakino(query) {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/x-www-form-urlencoded' }, baseHeaders())
   , body: body
-  }).then(function (r) { return r.text(); }).then(parseSearchResults);
+  }).then(function (r) {
+    return r.text().then(function (t) { logResponse('POST', BASE + '/ua/ q=' + query, r, t); return t; });
+  }).then(function (html) {
+    var results = parseSearchResults(html);
+    dbg('search results', results.length, results.slice(0, 3).map(function (x) { return x.title + ' (' + x.year + ')'; }).join(' | '));
+    return results;
+  });
 }
 
 // Year is used as a secondary signal alongside (not instead of) the title score: a query in
@@ -212,8 +236,8 @@ function extractPlayerStream(playerUrl, sourceName) {
     var m;
     while ((m = re.exec(scriptData))) fileMatches.push(m[1]);
     var raw = fileMatches.filter(function (f) { return f.indexOf('.m3u8') !== -1; })[0] || fileMatches[0];
-    if (!raw) return null;
-    var streamUrl = resolveStreamUrl(raw);
+    var streamUrl = raw ? resolveStreamUrl(raw) : null;
+    dbg('player', playerUrl.slice(0, 70), 'file=' + (raw ? 'yes' : 'no'), 'stream=' + (streamUrl ? 'yes' : 'no'));
     if (!streamUrl) return null;
     var refererHost = (/^https?:\/\/[^/]+/.exec(playerUrl) || [BASE])[0] + '/';
     return {
@@ -281,7 +305,12 @@ function pickSeasonPage(html, season) {
 
 function fetchEpisodeList(newsId) {
   var url = BASE + '/engine/ajax/playlists.php?news_id=' + newsId + '&xfield=playlist&time=' + Date.now();
-  return fetch(url, { headers: ajaxHeaders() }).then(function (r) { return r.json(); }).catch(function () { return null; });
+  return fetch(url, { headers: ajaxHeaders() }).then(function (r) {
+    return r.text().then(function (t) {
+      logResponse('GET', url, r, t);
+      try { return JSON.parse(t); } catch (e) { dbg('playlist not JSON'); return null; }
+    });
+  }).catch(function (e) { dbg('playlist fetch error', e && e.message); return null; });
 }
 
 // Confirmed against a real playlists.php response: attributes appear as
@@ -338,18 +367,25 @@ function loadEpisodesFor(pageUrl, html, episode) {
 // --- Entry point -----------------------------------------------------------
 
 function getStreams(tmdbId, mediaType, season, episode) {
+  dbg('start', tmdbId, mediaType, season, episode);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
+    dbg('tmdb', info.title, '/', info.originalTitle, info.year);
     if (!info.title) return [];
     return searchUakino(info.title).then(function (results) {
       if (results.length || !info.originalTitle || info.originalTitle === info.title) return results;
       return searchUakino(info.originalTitle);
     }).then(function (results) {
       var match = pickBestMatch(results, info);
+      dbg('match', match ? match.title + ' ' + match.href : 'none');
       if (!match) return [];
       if (mediaType !== 'tv' || !season || !episode) return resolveMovie(match.href);
       return resolveTv(match.href, season, episode);
+    }).then(function (streams) {
+      dbg('streams', streams.length);
+      return streams;
     });
-  }).catch(function () {
+  }).catch(function (e) {
+    dbg('error', e && (e.message || e));
     return [];
   });
 }
