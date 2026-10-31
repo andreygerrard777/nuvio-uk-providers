@@ -87,29 +87,6 @@
       ]
     },
     {
-      "id": "rezka",
-      "name": "HDRezka",
-      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми, серіали, мультфільми, аніме; усі озвучки (українські першими), по одному посиланню 720p на озвучку, субтитри",
-      "version": "2.5.0",
-      "author": "nuvio-uk-providers, live-verified",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
-      "filename": "providers/rezka.js",
-      "enabled": true,
-      "hasSettings": false,
-      "formats": [
-        "mp4",
-        "m3u8"
-      ],
-      "logo": "https://www.google.com/s2/favicons?domain=rezka.ag&sz=128",
-      "contentLanguage": [
-        "uk",
-        "ru"
-      ]
-    }
-    {
       "id": "uaserialspro",
       "name": "UASerialsPro",
       "description": "UASerialsPro - серіали, мультсеріали, аніме та фільми українською (порт з CloudStream, з власною AES-розшифровкою)",
@@ -128,6 +105,28 @@
       "logo": "https://www.google.com/s2/favicons?domain=uaserials.com&sz=128",
       "contentLanguage": [
         "uk"
+      ]
+    },
+    {
+      "id": "rezka",
+      "name": "HDRezka",
+      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми та серіали, усі озвучки, до 4K",
+      "version": "1.1.0",
+      "author": "custom implementation, HAR-verified",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/rezka.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": [
+        "m3u8",
+        "mp4"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=rezka.ag&sz=128",
+      "contentLanguage": [
+        "ru"
       ]
     }
   ]
