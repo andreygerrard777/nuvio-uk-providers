@@ -36,12 +36,56 @@ function ajaxHeaders() {
   return { Referer: BASE, 'X-Requested-With': 'XMLHttpRequest', 'User-Agent': UA };
 }
 
+// uakino.best and all its mirrors accept only TLS 1.3. Clients whose HTTP stack stops at TLS 1.2
+// (nuvio-native-legacy on older Samsung Tizen uses the system libcurl + OpenSSL 1.0) cannot
+// connect at all. tools/uakino_relay.py, run on any device in the same home network, bridges
+// that: the TV reaches it over plain HTTP and it fetches over TLS 1.3 from the same home IP.
+// Leave empty to always connect directly. Example: 'http://192.168.1.50:8765'
+var RELAY_URL = '';
+
+function isUakinoUrl(url) {
+  return /^https?:\/\/([a-z0-9-]+\.)*uakino\.[a-z]+(\/|\?|$)/i.test(String(url));
+}
+
+// Relay first when configured (on TLS-1.2-only clients it is the only path that works), with a
+// direct fallback when the relay is unreachable or reports an upstream failure, so a device that
+// can connect directly keeps working while the relay host is switched off. Only uakino hosts are
+// routed; player pages (ashdi etc.) and the video itself still go direct.
+function fetchUakino(url, opts) {
+  if (!RELAY_URL || !isUakinoUrl(url)) return fetch(url, opts);
+  var viaRelay = RELAY_URL.replace(/\/+$/, '') + '/fetch?url=' + encodeURIComponent(url);
+  return fetch(viaRelay, opts).then(function (r) {
+    if (r && r.status && r.status !== 502) return r;
+    dbg('relay failed', r && r.status);
+    return fetch(url, opts);
+  }, function (e) {
+    dbg('relay unreachable', e && (e.message || e));
+    return fetch(url, opts);
+  });
+}
+
 // Temporary diagnostics: Nuvio TV (Tizen/webOS) shows plugin console.warn output under
 // Settings > About > Console debug. Set DEBUG to false once the Tizen issue is understood.
-var DEBUG = true;
+var DEBUG = false;
+var _debugLog = [];
 function dbg() {
   if (!DEBUG) return;
-  try { console.warn.apply(console, ['[uakino]'].concat(Array.prototype.slice.call(arguments))); } catch (e) {}
+  var parts = Array.prototype.slice.call(arguments).filter(function (p) { return p !== '' && p != null; });
+  _debugLog.push(parts.join(' '));
+  try { console.warn.apply(console, ['[uakino]'].concat(parts)); } catch (e) {}
+}
+
+// When nothing is found, surface the log as pseudo-streams so it is visible directly in the
+// plugin test results on devices where the console isn't reachable.
+function debugStreams() {
+  return _debugLog.slice(0, 12).map(function (line, i) {
+    return {
+      name: 'Uakino DEBUG ' + (i + 1),
+      title: line.slice(0, 160),
+      url: 'https://uakino.best/debug-' + (i + 1) + '.m3u8',
+      quality: 'debug'
+    };
+  });
 }
 
 function logResponse(method, url, r, text) {
@@ -53,7 +97,7 @@ function logResponse(method, url, r, text) {
 }
 
 function fetchHtml(url, headers) {
-  return fetch(url, { headers: headers || baseHeaders() }).then(function (r) {
+  return fetchUakino(url, { headers: headers || baseHeaders() }).then(function (r) {
     return r.text().then(function (t) { logResponse('GET', url, r, t); return t; });
   });
 }
@@ -178,7 +222,7 @@ function parseSearchResults(html) {
 
 function searchUakino(query) {
   var body = 'do=search&subaction=search&story=' + encodeURIComponent(query).replace(/%20/g, '+');
-  return fetch(BASE + '/ua/', {
+  return fetchUakino(BASE + '/ua/', {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/x-www-form-urlencoded' }, baseHeaders())
   , body: body
@@ -305,7 +349,7 @@ function pickSeasonPage(html, season) {
 
 function fetchEpisodeList(newsId) {
   var url = BASE + '/engine/ajax/playlists.php?news_id=' + newsId + '&xfield=playlist&time=' + Date.now();
-  return fetch(url, { headers: ajaxHeaders() }).then(function (r) {
+  return fetchUakino(url, { headers: ajaxHeaders() }).then(function (r) {
     return r.text().then(function (t) {
       logResponse('GET', url, r, t);
       try { return JSON.parse(t); } catch (e) { dbg('playlist not JSON'); return null; }
@@ -367,6 +411,7 @@ function loadEpisodesFor(pageUrl, html, episode) {
 // --- Entry point -----------------------------------------------------------
 
 function getStreams(tmdbId, mediaType, season, episode) {
+  _debugLog = [];
   dbg('start', tmdbId, mediaType, season, episode);
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     dbg('tmdb', info.title, '/', info.originalTitle, info.year);
@@ -387,6 +432,8 @@ function getStreams(tmdbId, mediaType, season, episode) {
   }).catch(function (e) {
     dbg('error', e && (e.message || e));
     return [];
+  }).then(function (streams) {
+    return (DEBUG && (!streams || !streams.length)) ? debugStreams() : streams;
   });
 }
 
