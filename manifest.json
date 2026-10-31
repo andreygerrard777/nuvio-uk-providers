@@ -110,8 +110,8 @@
     {
       "id": "rezka",
       "name": "HDRezka",
-      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми та серіали, усі озвучки, до 4K",
-      "version": "1.1.0",
+      "description": "HDRezka (rezka.ag, резерв rezka-tv.org) - фільми та серіали, усі озвучки (українські першими), субтитри",
+      "version": "2.5.0",
       "author": "custom implementation, HAR-verified",
       "supportedTypes": [
         "movie",
