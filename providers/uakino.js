@@ -6,11 +6,9 @@
 // datacenter/cloud IP gets served a "Just a moment..." managed-challenge page instead of
 // real content (confirmed from this environment). A real browser on a residential/mobile
 // connection was confirmed (via a captured HAR) to pass through with zero challenge, so the
-// site itself isn't universally gated - only traffic Cloudflare flags as suspicious is. If a
-// Nuvio provider's fetch() is still blocked on a real device, that points to Nuvio routing
-// plugin network calls through its own backend infrastructure (a datacenter IP) rather than
-// the device's own connection - something no amount of JS here can work around. Verify this
-// live before relying on the provider.
+// site itself isn't universally gated. Whether provider fetch() passes depends on the
+// connection and HTTP client used by the particular Nuvio device and version. A successful
+// browser session does not by itself establish that the provider's fetch will also pass.
 //
 // Nuvio only gives us a TMDB id, not a title, so this provider resolves the TMDB id to a
 // title via the TMDB API, then runs it through Uakino's own site search and picks the best
@@ -21,7 +19,7 @@
 
 var TMDB_API_KEY = '439c478a771f35c05022f9feabcca01c'; // shared community demo key; swap for your own free key from themoviedb.org if you get rate-limited
 var BASE = 'https://uakino.best';
-var UA = 'Mozilla/5.0 (Linux; Android 15; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7778.215 Mobile Safari/537.36';
+var UA = 'UAKino/1.0 (Android)';
 
 function baseHeaders(referer) {
   return {
@@ -32,8 +30,9 @@ function baseHeaders(referer) {
   };
 }
 
-function ajaxHeaders() {
-  return { Referer: BASE, 'X-Requested-With': 'XMLHttpRequest', 'User-Agent': UA };
+function ajaxHeaders(referer) {
+  return { Referer: referer || BASE, 'X-Requested-With': 'XMLHttpRequest', 'User-Agent': UA,
+    Accept: 'application/json, text/javascript, */*; q=0.01' };
 }
 
 function fetchHtml(url, headers) {
@@ -167,6 +166,76 @@ function searchUakino(query) {
   }).then(function (r) { return r.text(); }).then(parseSearchResults);
 }
 
+// The live search endpoint returns the site's own title IDs, even when the
+// full search and detail pages are challenged. It requires the anonymous hash
+// from the homepage and can require the cookies set by that response.
+function getSearchSession() {
+  return fetch(BASE + '/', { headers: { 'User-Agent': UA } }).then(function (r) {
+    var raw = r.headers && r.headers.get ? (r.headers.get('set-cookie') || '') : '';
+    var cookies = raw.split(/,(?=\s*[^;,=\s]+=[^;,]*)/).map(function (part) {
+      return part.trim().split(';')[0];
+    }).filter(function (part) { return part.indexOf('=') > 0; }).join('; ');
+    return r.text().then(function (html) {
+      var hash = /\bdle_login_hash\s*=\s*['"]([^'"]*)['"]/.exec(html);
+      return { hash: hash ? hash[1] : '', cookies: cookies };
+    });
+  });
+}
+
+function unescapeHtml(s) {
+  return (s || '').replace(/&amp;/gi, '&').replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'").replace(/&nbsp;/gi, ' ')
+    .replace(/&#(\d+);/g, function (_, n) { return String.fromCharCode(Number(n)); })
+    .replace(/&#x([0-9a-f]+);/gi, function (_, n) { return String.fromCharCode(parseInt(n, 16)); });
+}
+
+function parseSuggestions(html) {
+  var results = [], re = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi, m;
+  while ((m = re.exec(html || ''))) {
+    if (!/\bclass\s*=\s*["'][^"']*\bsearch-result-link\b/i.test(m[1])) continue;
+    var href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(m[1]);
+    var heading = /class\s*=\s*["'][^"']*\bsearchheading\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i.exec(m[2]);
+    var original = /class\s*=\s*["'][^"']*\bsearch-orig-title\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i.exec(m[2]);
+    var year = /class\s*=\s*["'][^"']*\bsearch-extend-info\b[^"']*["'][^>]*>[\s\S]*?<span[^>]*>\s*(\d{4})/i.exec(m[2]);
+    if (!href || !heading) continue;
+    var url = unescapeHtml(href[1]);
+    if (url.charAt(0) === '/') url = BASE + url;
+    if (!/^https:\/\/uakino\.best\/\d+-[^/]*\.html(?:[?#].*)?$/i.test(url)) continue;
+    var title = unescapeHtml(heading[1].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+    var season = /(?:^|\s)(\d+)\s*сезон(?=\s|$)/i.exec(title) || /-(\d+)-sezon\.html/i.exec(url);
+    var cleanTitle = title.replace(/(?:^|\s)\d+\s*сезон(?=\s|$)/ig, ' ').replace(/\s+/g, ' ').trim();
+    results.push({ href: url, title: cleanTitle,
+      originalTitle: unescapeHtml(original ? original[1].replace(/<[^>]*>/g, ' ') : '').trim(),
+      year: year ? parseInt(year[1], 10) : null, season: season ? parseInt(season[1], 10) : null });
+  }
+  return results;
+}
+
+function searchSuggestions(query, session) {
+  var url = BASE + '/engine/lazydev/dle_search/ajax.php?story=' + encodeURIComponent(query) +
+    '&dle_hash=' + encodeURIComponent(session.hash) + '&thisUrl=' + encodeURIComponent(BASE + '/');
+  var headers = ajaxHeaders(BASE + '/');
+  if (session.cookies) headers.Cookie = session.cookies;
+  return fetch(url, { headers: headers }).then(function (r) { return r.json(); }).then(function (data) {
+    return parseSuggestions(data && data.content);
+  });
+}
+
+function pickSuggestion(results, info, mediaType, season) {
+  var best = null, bestScore = 0;
+  results.forEach(function (item) {
+    if (mediaType === 'tv' && season) {
+      if (item.season !== null && item.season !== Number(season)) return;
+      if (item.season === null && Number(season) !== 1) return;
+    } else if (mediaType !== 'tv' && item.season !== null) return;
+    if (mediaType !== 'tv' && info.year && item.year && item.year !== info.year) return;
+    var score = Math.max(tokenScore(item.title, info.title), tokenScore(item.title, info.originalTitle),
+      tokenScore(item.originalTitle, info.title), tokenScore(item.originalTitle, info.originalTitle));
+    if (score > bestScore) { bestScore = score; best = item; }
+  });
+  return bestScore >= 0.65 ? best : null;
+}
+
 // Year is used as a secondary signal alongside (not instead of) the title score: a query in
 // English against this Ukrainian-titled catalog (e.g. TMDB has no uk-UA translation for an older
 // film, so title===originalTitle) scores ~0 on tokens for the correct result too, since there's
@@ -274,14 +343,17 @@ function pickSeasonPage(html, season) {
     var n = (/\d+/.exec(r.label) || [])[0];
     return n && parseInt(n, 10) === season;
   })[0];
-  // The requested season being absent as a link (it's the current page's own season, or it
-  // genuinely doesn't exist) is only "not found" for a season other than the current one.
-  return match ? match.href : (season === 1 ? null : undefined);
+  // A season without a link can be the current page, including seasons other than 1.
+  if (match) return match.href;
+  var active = /<li[^>]*class=["'][^"']*season-active[^"']*["'][^>]*>([\s\S]*?)<\/li>/.exec(blockMatch[0]);
+  var activeNumber = active && /\d+/.exec(active[1]);
+  return activeNumber && parseInt(activeNumber[0], 10) === season ? null : undefined;
 }
 
-function fetchEpisodeList(newsId) {
-  var url = BASE + '/engine/ajax/playlists.php?news_id=' + newsId + '&xfield=playlist&time=' + Date.now();
-  return fetch(url, { headers: ajaxHeaders() }).then(function (r) { return r.json(); }).catch(function () { return null; });
+function fetchEpisodeList(newsId, pageUrl, editTime) {
+  var url = BASE + '/engine/ajax/playlists.php?news_id=' + encodeURIComponent(newsId) +
+    '&xfield=playlist&time=' + encodeURIComponent(editTime || '');
+  return fetch(url, { headers: ajaxHeaders(pageUrl) }).then(function (r) { return r.json(); }).catch(function () { return null; });
 }
 
 // Confirmed against a real playlists.php response: attributes appear as
@@ -319,7 +391,8 @@ function resolveTv(detailUrl, season, episode) {
 function loadEpisodesFor(pageUrl, html, episode) {
   var newsId = findNewsId(html, pageUrl);
   if (!newsId) return Promise.resolve([]);
-  return fetchEpisodeList(newsId).then(function (data) {
+  var editTime = /\bdle_edittime\s*=\s*['"]([^'"]*)['"]/.exec(html);
+  return fetchEpisodeList(newsId, pageUrl, editTime ? editTime[1] : '').then(function (data) {
     if (!data || !data.success) return [];
     var items = parseEpisodeItems(String(data.response || ''));
     // episode == null means "movie": every <li> is a different dub/source, take them all.
@@ -330,7 +403,7 @@ function loadEpisodesFor(pageUrl, html, episode) {
     if (!target.length) return [];
     return Promise.all(target.map(function (it) {
       var playerUrl = normalizePlayerUrl(it.file.trim());
-      return extractPlayerStream(playerUrl, it.voice || 'Uakino');
+      return extractPlayerStream(playerUrl, it.voice || 'Uakino').catch(function () { return null; });
     })).then(function (streams) { return streams.filter(Boolean); });
   });
 }
@@ -340,14 +413,18 @@ function loadEpisodesFor(pageUrl, html, episode) {
 function getStreams(tmdbId, mediaType, season, episode) {
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     if (!info.title) return [];
-    return searchUakino(info.title).then(function (results) {
-      if (results.length || !info.originalTitle || info.originalTitle === info.title) return results;
-      return searchUakino(info.originalTitle);
-    }).then(function (results) {
-      var match = pickBestMatch(results, info);
+    return getSearchSession().then(function (session) {
+      return searchSuggestions(info.title, session).then(function (results) {
+        var match = pickSuggestion(results, info, mediaType, season);
+        if (match || !info.originalTitle || info.originalTitle === info.title) return match;
+        return searchSuggestions(info.originalTitle, session).then(function (originalResults) {
+          return pickSuggestion(originalResults, info, mediaType, season);
+        });
+      });
+    }).then(function (match) {
       if (!match) return [];
-      if (mediaType !== 'tv' || !season || !episode) return resolveMovie(match.href);
-      return resolveTv(match.href, season, episode);
+      if (mediaType === 'tv' && (!season || !episode)) return [];
+      return loadEpisodesFor(match.href, '', mediaType === 'tv' ? Number(episode) : null);
     });
   }).catch(function () {
     return [];

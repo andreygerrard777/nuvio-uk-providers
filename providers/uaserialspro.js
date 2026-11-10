@@ -464,8 +464,16 @@ function parseSearchResults(html) {
 }
 
 function searchUASerials(query) {
-  var url = BASE + '/search/' + encodeURIComponent(query) + '/';
-  return fetchHtml(url).then(parseSearchResults);
+  var url = BASE + '/engine/mod_punpun/dle_search/ajax/uas_search.php?mode=suggest&q=' + encodeURIComponent(query);
+  return fetch(url, { headers: { 'User-Agent': UA, 'X-Requested-With': 'XMLHttpRequest', Referer: BASE + '/' } })
+    .then(function (r) { return r.json(); }).then(function (data) {
+      return (data.movies || []).filter(function (item) { return item.url && item.title_ua; }).map(function (item) {
+        return { href: item.url, title: item.title_ua, origTitle: item.title_orig || '', year: parseInt(item.year, 10) || null };
+      });
+    }).catch(function () { return []; }).then(function (results) {
+      if (results.length) return results;
+      return fetchHtml(BASE + '/search/' + encodeURIComponent(query) + '/').then(parseSearchResults);
+    });
 }
 
 // Two failure modes this guards against, both confirmed against real search results:
@@ -624,7 +632,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
   return getTmdbInfo(tmdbId, mediaType).then(function (info) {
     if (!info.title) return [];
     return searchUASerials(info.title).then(function (results) {
-      if (results.length || !info.originalTitle || info.originalTitle === info.title) return results;
+      if (pickBestMatch(results, info) || !info.originalTitle || info.originalTitle === info.title) return results;
       return searchUASerials(info.originalTitle);
     }).then(function (results) {
       var match = pickBestMatch(results, info);
