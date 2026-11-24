@@ -27,7 +27,7 @@
       "id": "uakino",
       "name": "Uakino",
       "description": "Uakino - фільми та серіали українською (порт з CloudStream, потребує перевірки через Cloudflare)",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "author": "ported from CakesTwix/cloudstream-extensions-uk",
       "supportedTypes": [
         "movie",
