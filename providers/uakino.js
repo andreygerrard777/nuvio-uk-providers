@@ -148,11 +148,13 @@ function parseSearchResults(html) {
   }
   var results = [];
   matches.forEach(function (item, idx) {
-    if (BLACKLIST_RE.test(item.href) || !item.title) return;
+    var url = catalogUrl(item.href);
+    if (!url || BLACKLIST_RE.test(url) || !item.title) return;
     var windowEnd = idx + 1 < matches.length ? matches[idx + 1].start : Math.min(html.length, item.end + 2000);
     var win = html.slice(item.end, windowEnd);
     var yearMatch = /\/find\/year\/(\d+)\//.exec(win);
-    results.push({ href: item.href, title: item.title, year: yearMatch ? parseInt(yearMatch[1], 10) : null });
+    results.push({ href: url, title: unescapeHtml(item.title), season: seasonFromUrl(url),
+      year: yearMatch ? parseInt(yearMatch[1], 10) : null });
   });
   return results;
 }
@@ -198,15 +200,14 @@ function parseSuggestions(html) {
     var original = /class\s*=\s*["'][^"']*\bsearch-orig-title\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i.exec(m[2]);
     var year = /class\s*=\s*["'][^"']*\bsearch-extend-info\b[^"']*["'][^>]*>[\s\S]*?<span[^>]*>\s*(\d{4})/i.exec(m[2]);
     if (!href || !heading) continue;
-    var url = unescapeHtml(href[1]);
-    if (url.charAt(0) === '/') url = BASE + url;
-    if (!/^https:\/\/uakino\.best\/\d+-[^/]*\.html(?:[?#].*)?$/i.test(url)) continue;
+    var url = catalogUrl(href[1]);
+    if (!url) continue;
     var title = unescapeHtml(heading[1].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
-    var season = /(?:^|\s)(\d+)\s*сезон(?=\s|$)/i.exec(title) || /-(\d+)-sezon\.html/i.exec(url);
+    var season = /(?:^|\s)(\d+)\s*сезон(?=\s|$)/i.exec(title);
     var cleanTitle = title.replace(/(?:^|\s)\d+\s*сезон(?=\s|$)/ig, ' ').replace(/\s+/g, ' ').trim();
     results.push({ href: url, title: cleanTitle,
       originalTitle: unescapeHtml(original ? original[1].replace(/<[^>]*>/g, ' ') : '').trim(),
-      year: year ? parseInt(year[1], 10) : null, season: season ? parseInt(season[1], 10) : null });
+      year: year ? parseInt(year[1], 10) : null, season: season ? parseInt(season[1], 10) : seasonFromUrl(url) });
   }
   return results;
 }
@@ -221,19 +222,53 @@ function searchSuggestions(query, session) {
   });
 }
 
+function catalogUrl(href) {
+  var url = unescapeHtml(href);
+  if (url.charAt(0) === '/') url = BASE + url;
+  return /^https:\/\/uakino\.best\/(?:[\w-]+\/)*\d+-[^/?#\\]+\.html(?:[?#].*)?$/i.test(url) ? url : null;
+}
+
+function seasonFromUrl(url) {
+  var match = /-(\d+)-sezon\.html(?:[?#]|$)/i.exec(url);
+  return match ? Number(match[1]) : null;
+}
+
+function matchesEdition(item, info, mediaType, season) {
+  if (mediaType === 'tv') return (item.season || 1) === Number(season);
+  return item.season === null && (!info.year || !item.year || item.year === info.year);
+}
+
+function catalogTitleScore(title, info) {
+  var name = (title || '').replace(/\s+\d+\s+season\s*$/i, '');
+  return [name].concat(name.split(/\s+\/\s+/)).reduce(function (best, alias) {
+    return Math.max(best, tokenScore(alias, info.title), tokenScore(alias, info.originalTitle));
+  }, 0);
+}
+
 function pickSuggestion(results, info, mediaType, season) {
   var best = null, bestScore = 0;
   results.forEach(function (item) {
-    if (mediaType === 'tv' && season) {
-      if (item.season !== null && item.season !== Number(season)) return;
-      if (item.season === null && Number(season) !== 1) return;
-    } else if (mediaType !== 'tv' && item.season !== null) return;
-    if (mediaType !== 'tv' && info.year && item.year && item.year !== info.year) return;
-    var score = Math.max(tokenScore(item.title, info.title), tokenScore(item.title, info.originalTitle),
-      tokenScore(item.originalTitle, info.title), tokenScore(item.originalTitle, info.originalTitle));
+    if (!matchesEdition(item, info, mediaType, season)) return;
+    var score = Math.max(catalogTitleScore(item.title, info), catalogTitleScore(item.originalTitle, info));
     if (score > bestScore) { bestScore = score; best = item; }
   });
   return bestScore >= 0.65 ? best : null;
+}
+
+function findInFullSearch(query, info, mediaType, season) {
+  return searchUakino(query).then(function (results) {
+    var candidates = results.filter(function (item) { return matchesEdition(item, info, mediaType, season); });
+    var match = pickSuggestion(candidates, info, mediaType, season);
+    if (match || candidates.length !== 1) return match;
+    // Full-search cards can show only the Ukrainian name. Verify the original on the detail page.
+    var item = candidates[0];
+    return fetchHtml(item.href).then(function (html) {
+      var original = /<span\b[^>]*class=["'][^"']*\borigintitle\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i.exec(html);
+      if (!original) return null;
+      item.originalTitle = unescapeHtml(original[1].replace(/<[^>]+>/g, ' ')).trim();
+      return pickSuggestion([item], info, mediaType, season);
+    });
+  }).catch(function () { return null; });
 }
 
 // Year is used as a secondary signal alongside (not instead of) the title score: a query in
@@ -420,6 +455,13 @@ function getStreams(tmdbId, mediaType, season, episode) {
         return searchSuggestions(info.originalTitle, session).then(function (originalResults) {
           return pickSuggestion(originalResults, info, mediaType, season);
         });
+      });
+    }).catch(function () { return null; }).then(function (match) {
+      if (match) return match;
+      var query = info.originalTitle || info.title;
+      return findInFullSearch(query, info, mediaType, season).then(function (found) {
+        if (found || query === info.title) return found;
+        return findInFullSearch(info.title, info, mediaType, season);
       });
     }).then(function (match) {
       if (!match) return [];
